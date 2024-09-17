@@ -9,11 +9,15 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 
 import math
 import inspect
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Dict, Any
 
 import torch
 import torch.nn as nn
+from huggingface_hub import PyTorchModelHubMixin
 from torch.nn import functional as F
+from transformers import PretrainedConfig, PreTrainedModel
+
 
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
@@ -106,7 +110,7 @@ class Block(nn.Module):
         return x
 
 @dataclass
-class GPTConfig:
+class GPTConfig(PretrainedConfig):
     block_size: int = 1024
     vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
     n_layer: int = 12
@@ -114,11 +118,18 @@ class GPTConfig:
     n_embd: int = 768
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
+    look_ahead_size: int = 1
+    model_type: str = "nanogpt"
+    attribute_map: Dict[str, Any] = field(default_factory=lambda:{"num_hidden_layers": "n_layer"})
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.attribute_map["num_hidden_layers"] = "n_layer"
 
 class GPT(nn.Module):
 
     def __init__(self, config):
-        super().__init__()
+        super().__init__(config)
         assert config.vocab_size is not None
         assert config.block_size is not None
         self.config = config
@@ -204,7 +215,8 @@ class GPT(nn.Module):
                 block.attn.bias = block.attn.bias[:,:,:block_size,:block_size]
 
     @classmethod
-    def from_pretrained(cls, model_type, override_args=None):
+    def from_pretrained2(cls, model_type, override_args=None):
+        print(model_type)
         assert model_type in {'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'}
         override_args = override_args or {} # default to empty dict
         # only dropout can be overridden see more notes below
@@ -326,5 +338,119 @@ class GPT(nn.Module):
             idx_next = torch.multinomial(probs, num_samples=1)
             # append sampled index to the running sequence and continue
             idx = torch.cat((idx, idx_next), dim=1)
+
+        return idx
+
+
+
+class GPT_LookAhead_Heads(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.heads = nn.ModuleList([nn.Linear(config.n_embd, config.vocab_size, bias=False) for _ in range(config.look_ahead_size)])
+
+    def forward(self, x):
+        # ModuleList can act as an iterable, or be indexed using ints
+        # Apply each head to the shared features
+        logits = [head(x) for head in self.heads]
+
+        # Stack logits along a new dimension to create a tensor of shape [batch_size, num_heads, output_size]
+        logits = torch.stack(logits, dim=1)
+        return logits
+
+
+class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
+            repo_url="hrezaei/nanoGPTLookAhead",
+            pipeline_tag="text-generation",
+            license="mit",):
+    config_class = GPTConfig
+    def __init__(self, config, **kwargs):
+        super().__init__(config)
+        assert config.vocab_size is not None
+        assert config.block_size is not None
+        self.config = config
+
+        self.transformer = nn.ModuleDict(dict(
+            wte = nn.Embedding(config.vocab_size, config.n_embd),
+            wpe = nn.Embedding(config.block_size, config.n_embd),
+            drop = nn.Dropout(config.dropout),
+            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+            ln_f = LayerNorm(config.n_embd, bias=config.bias),
+        ))
+        self.lm_head = GPT_LookAhead_Heads(config)
+        # with weight tying when using torch.compile() some warnings get generated:
+        # "UserWarning: functional_call was passed multiple values for tied weights.
+        # This behavior is deprecated and will be an error in future versions"
+        # not 100% sure what this is, so far seems to be harmless. TODO investigate
+        self.transformer.wte.weight = self.lm_head.heads[0].weight # https://paperswithcode.com/method/weight-tying
+
+        # init all weights
+        self.apply(self._init_weights)
+        # apply special scaled init to the residual projections, per GPT-2 paper
+        for pn, p in self.named_parameters():
+            if pn.endswith('c_proj.weight'):
+                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
+
+        # report number of parameters
+        print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
+
+    def forward(self, idx, targets=None, input_ids=None, **kwargs):
+        device = idx.device
+        b, t = idx.size()
+        assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+        pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
+
+        # forward the GPT model itself
+        tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
+        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
+        x = self.transformer.drop(tok_emb + pos_emb)
+        for block in self.transformer.h:
+            x = block(x)
+        x = self.transformer.ln_f(x)
+
+        if targets is not None:
+            # if we are given some desired targets also calculate the loss
+            logits = self.lm_head(x)
+            losses = []
+            for head_index in range(logits.shape[1]):
+                head_logits = logits[:, head_index]
+                head_targets = targets[head_index]
+                losses.append(F.cross_entropy(head_logits.reshape(-1, head_logits.size(-1)), head_targets.view(-1), ignore_index=-1))
+            loss = torch.mean(torch.stack(losses))
+        else:
+            # inference-time mini-optimization: only forward the lm_head on the very last position
+            logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
+            loss = None
+
+        return logits, loss
+
+    @torch.no_grad()
+    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
+        """
+        Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
+        the sequence max_new_tokens times, feeding the predictions back into the model each time.
+        Most likely you'll want to make sure to be in model.eval() mode of operation for this.
+        """
+        for _ in range(max_new_tokens // self.config.look_ahead_size):
+            # if the sequence context is growing too long we must crop it at block_size
+            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+            # forward the model to get the logits for the index in the sequence
+            logits, _ = self(idx_cond)
+            # pluck the logits at the final step and scale by desired temperature
+            print(f"{logits.shape=}")
+            logits = logits[:, :, -1, :] / temperature
+            print(f"{logits.shape=}")
+            # optionally crop the logits to only the top k options
+            if top_k is not None:
+                logits = logits.squeeze(0)
+                print(f"{logits.shape=}")
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                logits[logits < v[:, [-1]]] = -float('Inf')
+            # apply softmax to convert logits to (normalized) probabilities
+            probs = F.softmax(logits, dim=-1)
+            # sample from the distribution
+            for i in range(probs.size(0)):
+                idx_next = torch.multinomial(probs[i, None], num_samples=1)
+                # append sampled index to the running sequence and continue
+                idx = torch.cat((idx, idx_next), dim=1)
 
         return idx
