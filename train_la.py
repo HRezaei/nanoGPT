@@ -29,7 +29,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 from transformers import AutoConfig, AutoModel, AutoModelForCausalLM
 
-from model import GPTConfig, GPT, GPTLA
+from model import GPTConfig, GPT, GPTLA, GPT_LAE, GPT_LAA
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
@@ -77,6 +77,7 @@ compile = True # use PyTorch 2.0 to compile the model to be faster
 
 model_class_name = 'GPT'
 look_ahead_size = 1
+look_ahead_mode = 'expand' # The other mode is "replicate". In expand, the input and the labels will be expanded by look_ahead_size. In replicate, the LM heads will be replicated each with a separate target
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
@@ -127,15 +128,21 @@ def get_batch(split):
         data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
     else:
         data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
-    ix = torch.randint(len(data) - block_size - (look_ahead_size - 1), (batch_size,))
+    if look_ahead_mode == "replicate":
+        ix = torch.randint(len(data) - block_size - (look_ahead_size - 1), (batch_size,))
+    else:
+        ix = torch.randint(len(data) - block_size - look_ahead_size, (batch_size,))
     x = torch.stack([torch.from_numpy((data[i:i + block_size]).astype(np.int64)) for i in ix])
-    ys = []
-    for look_ahead in range(1, look_ahead_size + 1):
-        y = torch.stack(
-            [torch.from_numpy((data[i + look_ahead:i + look_ahead + block_size]).astype(np.int64)) for i in ix])
-        ys.append(y)
-    y = torch.stack(ys)
-    del ys
+    if look_ahead_mode == "replicate":
+        ys = []
+        for look_ahead in range(1, look_ahead_size + 1):
+            y = torch.stack(
+                [torch.from_numpy((data[i + look_ahead:i + look_ahead + block_size]).astype(np.int64)) for i in ix])
+            ys.append(y)
+        y = torch.stack(ys)
+        del ys
+    else:
+        y = torch.stack([torch.from_numpy((data[i + 1:i + 1 + block_size + look_ahead_size]).astype(np.int64)) for i in ix])
     if device_type == 'cuda':
         # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
         x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)

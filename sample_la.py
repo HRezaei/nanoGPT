@@ -3,10 +3,11 @@ Sample from a trained model
 """
 import os
 import pickle
+import sys
 from contextlib import nullcontext
 import torch
 import tiktoken
-from model import GPTConfig, GPT, GPTLA
+from model import GPTConfig, GPT, GPTLA, GPT_LAE, GPT_LAA
 
 # -----------------------------------------------------------------------------
 init_from = 'resume' # either 'resume' (from an out_dir) or a gpt2 variant (e.g. 'gpt2-xl')
@@ -20,9 +21,16 @@ seed = 1337
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1', etc.
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32' or 'bfloat16' or 'float16'
 compile = False # use PyTorch 2.0 to compile the model to be faster
+
+model_class_name = 'GPTLA'
+look_ahead_size = 2
+look_ahead_mode = "expand"
+
 exec(open('configurator.py').read()) # overrides from command line or config file
 # -----------------------------------------------------------------------------
-look_ahead_size = 2
+
+
+model_class = getattr(sys.modules[__name__], model_class_name)
 
 torch.manual_seed(seed)
 torch.cuda.manual_seed(seed)
@@ -38,7 +46,7 @@ if init_from == 'resume':
     ckpt_path = os.path.join(out_dir, 'ckpt.pt')
     checkpoint = torch.load(ckpt_path, map_location=device)
     gptconf = GPTConfig(**checkpoint['model_args'])
-    model = GPTLA(gptconf)
+    model = model_class(gptconf)
     state_dict = checkpoint['model']
     unwanted_prefix = '_orig_mod.'
     for k,v in list(state_dict.items()):
