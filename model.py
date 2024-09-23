@@ -17,6 +17,7 @@ import torch.nn as nn
 from huggingface_hub import PyTorchModelHubMixin
 from torch.nn import functional as F
 from transformers import PretrainedConfig, PreTrainedModel
+from transformers.modeling_outputs import CausalLMOutputWithCrossAttentions
 
 
 class LayerNorm(nn.Module):
@@ -77,7 +78,8 @@ class CausalSelfAttention(nn.Module):
 
         # output projection
         y = self.resid_dropout(self.c_proj(y))
-        return y
+        present = (k, v) # retrun key values to comply with HF transformers API
+        return y, present
 
 class MLP(nn.Module):
 
@@ -105,9 +107,10 @@ class Block(nn.Module):
         self.mlp = MLP(config)
 
     def forward(self, x):
-        x = x + self.attn(self.ln_1(x))
+        (hidden_state, presents) = self.attn(self.ln_1(x))
+        x = x + hidden_state  # add residual
         x = x + self.mlp(self.ln_2(x))
-        return x
+        return x, presents
 
 @dataclass
 class GPTConfig(PretrainedConfig):
@@ -125,6 +128,7 @@ class GPTConfig(PretrainedConfig):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.attribute_map["num_hidden_layers"] = "n_layer"
+        self.attribute_map["hidden_size"] = "n_embd"
 
 class GPT(nn.Module):
 
@@ -403,8 +407,10 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
         pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
         x = self.transformer.drop(tok_emb + pos_emb)
+        past_key_values = ()
         for block in self.transformer.h:
-            x = block(x)
+            (x, present) = block(x)
+            past_key_values = past_key_values + (present)
         x = self.transformer.ln_f(x)
 
         if targets is not None:
@@ -421,7 +427,14 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
             logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
             loss = None
 
-        return logits, loss
+        return CausalLMOutputWithCrossAttentions(
+            loss=loss,
+            logits=logits,
+            past_key_values=past_key_values,
+            hidden_states=None,  # For now, I don't need this
+            attentions=None,  # For now, I don't need this
+            cross_attentions=None,  # For now, I don't need this
+        )
 
     @torch.no_grad()
     def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
@@ -434,7 +447,8 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
             # if the sequence context is growing too long we must crop it at block_size
             idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
             # forward the model to get the logits for the index in the sequence
-            logits, _ = self(idx_cond)
+            output = self(idx_cond)
+            logits = output.logits
             # pluck the logits at the final step and scale by desired temperature
             logits = logits[:, :, -1, :] / temperature
             # optionally crop the logits to only the top k options
