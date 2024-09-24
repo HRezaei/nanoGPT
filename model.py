@@ -123,16 +123,30 @@ class GPTConfig(PretrainedConfig):
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     look_ahead_size: int = 1
     model_type: str = "nanogpt"
-    attribute_map: Dict[str, Any] = field(default_factory=lambda:{"num_hidden_layers": "n_layer"})
+    attribute_map: Dict[str, Any] = field(default_factory=lambda: {"num_hidden_layers": "n_layer"})
+    auto_map: Dict[str, Any] = field(default_factory=lambda: {
+        "AutoConfig": "model.GPTConfig",
+        "AutoModel": "model.GPT"
+    })
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.attribute_map["num_hidden_layers"] = "n_layer"
         self.attribute_map["hidden_size"] = "n_embd"
+        self.auto_map = {
+            "AutoConfig": "model.GPTConfig",
+            "AutoModel": "model.GPT",
+            "AutoModelForCausalLM": "model.GPT"
+        }
 
-class GPT(nn.Module):
 
-    def __init__(self, config):
+class GPT(PyTorchModelHubMixin, PreTrainedModel,
+            repo_url="https://github.com/HRezaei/nanoGPT",
+            pipeline_tag="text-generation",
+            license="mit",):
+    config_class = GPTConfig
+
+    def __init__(self, config, **kwargs):
         super().__init__(config)
         assert config.vocab_size is not None
         assert config.block_size is not None
@@ -182,30 +196,41 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None):
-        device = idx.device
-        b, t = idx.size()
+    def forward(self, input_ids, targets=None, attention_mask=None, output_hidden_states=False, **kwargs):
+        device = input_ids.device
+        b, t = input_ids.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
 
         # forward the GPT model itself
-        tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
+        tok_emb = self.transformer.wte(input_ids) # token embeddings of shape (b, t, n_embd)
         pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
         x = self.transformer.drop(tok_emb + pos_emb)
+        past_key_values = ()
+        all_hidden_states = ()
         for block in self.transformer.h:
-            x = block(x)
+            if output_hidden_states:
+                all_hidden_states = all_hidden_states + (x,)
+            (x, present) = block(x)
+            past_key_values = past_key_values + (present, )
         x = self.transformer.ln_f(x)
 
+        # I disabled inference-time mini-optimization done by Andrej because GLAM requires other layers:
+        logits = self.lm_head(x)
         if targets is not None:
             # if we are given some desired targets also calculate the loss
-            logits = self.lm_head(x)
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
         else:
-            # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
             loss = None
 
-        return logits, loss
+        return CausalLMOutputWithCrossAttentions(
+            loss=loss,
+            logits=logits,
+            past_key_values=past_key_values,
+            hidden_states=all_hidden_states,  # For now, I don't need this
+            attentions=None,  # For now, I don't need this
+            cross_attentions=None,  # For now, I don't need this
+        )
 
     def crop_block_size(self, block_size):
         # model surgery to decrease the block size if necessary
@@ -329,7 +354,7 @@ class GPT(nn.Module):
             # if the sequence context is growing too long we must crop it at block_size
             idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
             # forward the model to get the logits for the index in the sequence
-            logits, _ = self(idx_cond)
+            logits = self(idx_cond).logits
             # pluck the logits at the final step and scale by desired temperature
             logits = logits[:, -1, :] / temperature
             # optionally crop the logits to only the top k options
@@ -362,11 +387,33 @@ class GPT_LookAhead_Heads(nn.Module):
         return logits
 
 
+@dataclass
+class CausalLMOutputWithCrossAttentionsAndLookAhead(CausalLMOutputWithCrossAttentions):
+    look_ahead_logits: torch.FloatTensor = None
+
+
+@dataclass
+class GPTLAConfig(GPTConfig):
+    auto_map: Dict[str, Any] = field(default_factory=lambda: {
+        "AutoConfig": "model.GPTLAConfig",
+        "AutoModel": "model.GPTLA"
+    })
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.auto_map = {
+            "AutoConfig": "model.GPTLAConfig",
+            "AutoModel": "model.GPTLA",
+            "AutoModelForCausalLM": "model.GPTLA"
+        }
+
+
 class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
             repo_url="hrezaei/nanoGPTLookAhead",
             pipeline_tag="text-generation",
             license="mit",):
-    config_class = GPTConfig
+    config_class = GPTLAConfig
+
     def __init__(self, config, **kwargs):
         super().__init__(config)
         assert config.vocab_size is not None
@@ -397,25 +444,29 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
 
-    def forward(self, idx, targets=None):
-        device = idx.device
-        b, t = idx.size()
+    def forward(self, input_ids, targets=None, output_hidden_states=False, **kwargs):
+        device = input_ids.device
+        b, t = input_ids.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
 
         # forward the GPT model itself
-        tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
+        tok_emb = self.transformer.wte(input_ids) # token embeddings of shape (b, t, n_embd)
         pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
         x = self.transformer.drop(tok_emb + pos_emb)
         past_key_values = ()
+        all_hidden_states = ()
         for block in self.transformer.h:
+            if output_hidden_states:
+                all_hidden_states = all_hidden_states + (x,)
             (x, present) = block(x)
-            past_key_values = past_key_values + (present)
+            past_key_values = past_key_values + (present, )
         x = self.transformer.ln_f(x)
 
+        # I disabled Andrej's optimization, to make output the same shape as HF transformer models
+        logits = self.lm_head(x)
         if targets is not None:
             # if we are given some desired targets also calculate the loss
-            logits = self.lm_head(x)
             losses = []
             for head_index in range(logits.shape[1]):
                 head_logits = logits[:, head_index]
@@ -424,16 +475,17 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
             loss = torch.mean(torch.stack(losses))
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
+            #logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
             loss = None
 
-        return CausalLMOutputWithCrossAttentions(
+        return CausalLMOutputWithCrossAttentionsAndLookAhead(
             loss=loss,
-            logits=logits,
+            logits=logits[:, 0],
             past_key_values=past_key_values,
-            hidden_states=None,  # For now, I don't need this
+            hidden_states=all_hidden_states,  # For now, I don't need this
             attentions=None,  # For now, I don't need this
             cross_attentions=None,  # For now, I don't need this
+            look_ahead_logits=logits[:, 1:]
         )
 
     @torch.no_grad()
@@ -448,13 +500,12 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
             idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
             # forward the model to get the logits for the index in the sequence
             output = self(idx_cond)
-            logits = output.logits
+            logits = torch.cat([output.logits.unsqueeze(1), output.look_ahead_logits], dim=1)
             # pluck the logits at the final step and scale by desired temperature
             logits = logits[:, :, -1, :] / temperature
             # optionally crop the logits to only the top k options
             if top_k is not None:
                 logits = logits.squeeze(0)
-                print(f"{logits.shape=}")
                 v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
                 logits[logits < v[:, [-1]]] = -float('Inf')
             # apply softmax to convert logits to (normalized) probabilities

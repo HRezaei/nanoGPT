@@ -29,7 +29,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 from transformers import AutoConfig, AutoModel, AutoModelForCausalLM
 
-from model import GPTConfig, GPT, GPTLA, GPT_LAE, GPT_LAA
+from model import GPT, GPTLA, GPT_LAE, GPT_LAA, GPTLAConfig
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
@@ -173,7 +173,7 @@ if init_from == 'scratch':
     if meta_vocab_size is None:
         print("defaulting to vocab_size of GPT-2 to 50304 (50257 rounded up for efficiency)")
     model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else 50304
-    gptconf = GPTConfig(**model_args)
+    gptconf = GPTLAConfig(**model_args)
     model = model_class(gptconf)
 elif init_from == 'resume':
     print(f"Resuming training from {out_dir}")
@@ -186,7 +186,7 @@ elif init_from == 'resume':
     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
         model_args[k] = checkpoint_model_args[k]
     # create the model
-    gptconf = GPTConfig(**model_args)
+    gptconf = GPTLAConfig(**model_args)
     model = model_class(gptconf)
     state_dict = checkpoint['model']
     # fix the keys of the state dictionary :(
@@ -241,9 +241,7 @@ def estimate_loss():
         for k in range(eval_iters):
             X, Y = get_batch(split)
             with ctx:
-                output = model(X, Y)
-                logits = output.logits
-                loss = output.loss
+                loss = model(X, Y).loss
             losses[k] = loss.item()
         out[split] = losses.mean()
     model.train()
@@ -355,11 +353,11 @@ while True:
     if iter_num > max_iters:
         break
 
-AutoConfig.register("nanogpt", GPTConfig)
-AutoModel.register(GPTConfig, GPTLA)
-AutoModelForCausalLM.register(GPTConfig, GPTLA)
+AutoConfig.register("nanogpt", GPTLAConfig)
+AutoModel.register(GPTLAConfig, GPTLA)
+AutoModelForCausalLM.register(GPTLAConfig, GPTLA)
 
-GPTConfig.register_for_auto_class()
+GPTLAConfig.register_for_auto_class()
 GPTLA.register_for_auto_class("AutoModel")
 GPTLA.register_for_auto_class("AutoModelForCausalLM")
 

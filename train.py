@@ -26,6 +26,7 @@ import numpy as np
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
+from transformers import AutoConfig, AutoModel, AutoModelForCausalLM
 
 from model import GPTConfig, GPT
 
@@ -219,10 +220,10 @@ def estimate_loss():
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
         for k in range(eval_iters):
-            X, Y = get_batch(split)
+            iteration_x, iteration_y = get_batch(split)
             with ctx:
-                logits, loss = model(X, Y)
-            losses[k] = loss.item()
+                iteration_loss = model(iteration_x, targets=iteration_y).loss
+            losses[k] = iteration_loss.item()
         out[split] = losses.mean()
     model.train()
     return out
@@ -297,7 +298,7 @@ while True:
             # looking at the source of that context manager, it just toggles this variable
             model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
         with ctx:
-            logits, loss = model(X, Y)
+            loss = model(X, Y).loss
             loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         X, Y = get_batch('train')
@@ -331,6 +332,23 @@ while True:
     # termination conditions
     if iter_num > max_iters:
         break
+
+
+AutoConfig.register("nanogpt", GPTConfig)
+AutoModel.register(GPTConfig, GPT)
+AutoModelForCausalLM.register(GPTConfig, GPT)
+
+GPTConfig.register_for_auto_class()
+GPT.register_for_auto_class("AutoModel")
+GPT.register_for_auto_class("AutoModelForCausalLM")
+
+# save locally
+model.save_pretrained("nanoGPT")
+
+print("pushing")
+model.push_to_hub("hrezaei/nanoGPT", private=True)
+print("push completed")
+print(model)
 
 if ddp:
     destroy_process_group()
