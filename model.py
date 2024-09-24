@@ -54,7 +54,7 @@ class CausalSelfAttention(nn.Module):
             self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
                                         .view(1, 1, config.block_size, config.block_size))
 
-    def forward(self, x):
+    def forward(self, x, layer_past=None):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
@@ -62,6 +62,13 @@ class CausalSelfAttention(nn.Module):
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+
+        # Optional kv caching
+        if layer_past is not None:
+            past_key = layer_past[0]
+            past_value = layer_past[1]
+            k = torch.cat((past_key, k), dim=-2)
+            v = torch.cat((past_value, v), dim=-2)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
@@ -106,8 +113,8 @@ class Block(nn.Module):
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
-    def forward(self, x):
-        (hidden_state, presents) = self.attn(self.ln_1(x))
+    def forward(self, x, layer_past=None):
+        (hidden_state, presents) = self.attn(self.ln_1(x), layer_past=layer_past)
         x = x + hidden_state  # add residual
         x = x + self.mlp(self.ln_2(x))
         return x, presents
@@ -196,7 +203,17 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, input_ids, targets=None, attention_mask=None, output_hidden_states=False, **kwargs):
+    def forward(self,
+                input_ids,
+                targets=None,
+                attention_mask=None,
+                output_hidden_states=False,
+                past_key_values=None,
+                **kwargs
+        ):
+        if past_key_values is None:
+            past_key_values = tuple([None] * len(self.transformer.h))
+
         device = input_ids.device
         b, t = input_ids.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
@@ -206,13 +223,13 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
         tok_emb = self.transformer.wte(input_ids) # token embeddings of shape (b, t, n_embd)
         pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
         x = self.transformer.drop(tok_emb + pos_emb)
-        past_key_values = ()
+        presents = ()
         all_hidden_states = ()
-        for block in self.transformer.h:
+        for (block, layer_past) in zip(self.transformer.h, past_key_values):
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (x,)
-            (x, present) = block(x)
-            past_key_values = past_key_values + (present, )
+            (x, present) = block(x, layer_past=layer_past)
+            presents = presents + (present, )
         x = self.transformer.ln_f(x)
 
         # I disabled inference-time mini-optimization done by Andrej because GLAM requires other layers:
@@ -226,7 +243,7 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
         return CausalLMOutputWithCrossAttentions(
             loss=loss,
             logits=logits,
-            past_key_values=past_key_values,
+            past_key_values=presents,
             hidden_states=all_hidden_states,  # For now, I don't need this
             attentions=None,  # For now, I don't need this
             cross_attentions=None,  # For now, I don't need this
@@ -371,7 +388,6 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
         return idx
 
 
-
 class GPT_LookAhead_Heads(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -432,7 +448,7 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
         # "UserWarning: functional_call was passed multiple values for tied weights.
         # This behavior is deprecated and will be an error in future versions"
         # not 100% sure what this is, so far seems to be harmless. TODO investigate
-        self.transformer.wte.weight = self.lm_head.heads[0].weight # https://paperswithcode.com/method/weight-tying
+        self.transformer.wte.weight = self.lm_head.heads[0].weight  # https://paperswithcode.com/method/weight-tying
 
         # init all weights
         self.apply(self._init_weights)
@@ -444,7 +460,10 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
 
-    def forward(self, input_ids, targets=None, output_hidden_states=False, **kwargs):
+    def forward(self, input_ids, targets=None, output_hidden_states=False, past_key_values=None, **kwargs):
+        if past_key_values is None:
+            past_key_values = tuple([None] * len(self.transformer.h))
+
         device = input_ids.device
         b, t = input_ids.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
@@ -454,13 +473,13 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
         tok_emb = self.transformer.wte(input_ids) # token embeddings of shape (b, t, n_embd)
         pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
         x = self.transformer.drop(tok_emb + pos_emb)
-        past_key_values = ()
+        presents = ()
         all_hidden_states = ()
-        for block in self.transformer.h:
+        for (block, layer_past) in zip(self.transformer.h, past_key_values):
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (x,)
-            (x, present) = block(x)
-            past_key_values = past_key_values + (present, )
+            (x, present) = block(x, layer_past=layer_past)
+            presents = presents + (present, )
         x = self.transformer.ln_f(x)
 
         # I disabled Andrej's optimization, to make output the same shape as HF transformer models
@@ -481,7 +500,7 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
         return CausalLMOutputWithCrossAttentionsAndLookAhead(
             loss=loss,
             logits=logits[:, 0],
-            past_key_values=past_key_values,
+            past_key_values=presents,
             hidden_states=all_hidden_states,  # For now, I don't need this
             attentions=None,  # For now, I don't need this
             cross_attentions=None,  # For now, I don't need this
