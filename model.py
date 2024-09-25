@@ -157,11 +157,12 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
             license="mit",):
     config_class = GPTConfig
 
-    def __init__(self, config, **kwargs):
+    def __init__(self, config, device_map=None, **kwargs):
         config.auto_map["AutoModel"] = f"model.{self.__class__.__name__}"
         config.auto_map["AutoModelForCausalLM"] = f"model.{self.__class__.__name__}"
         model_type = self.__class__.__name__.lower().replace("gpt", "").replace("_", "")
-        config.model_type = f"nanogpt_{model_type}"
+        if model_type:
+            config.model_type = f"nanogpt_{model_type}"
         super().__init__(config)
         assert config.vocab_size is not None
         assert config.block_size is not None
@@ -187,6 +188,9 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
         for pn, p in self.named_parameters():
             if pn.endswith('c_proj.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
+
+        if device_map is not None and '' in device_map:
+            self.to(device_map[''])
 
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
@@ -422,7 +426,7 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
             license="mit",):
     config_class = GPTConfig
 
-    def __init__(self, config, **kwargs):
+    def __init__(self, config, device_map=None, **kwargs):
         config.auto_map["AutoModel"] = f"model.{self.__class__.__name__}"
         config.auto_map["AutoModelForCausalLM"] = f"model.{self.__class__.__name__}"
         super().__init__(config)
@@ -450,6 +454,9 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
         for pn, p in self.named_parameters():
             if pn.endswith('c_proj.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
+
+        if device_map is not None and '' in device_map:
+            self.to(device_map[''])
 
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
@@ -506,7 +513,7 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
 class GPT_LAE(GPT, PyTorchModelHubMixin, PreTrainedModel):
     config_class = GPTConfig
 
-    def __init__(self, config, **kwargs):
+    def __init__(self, config, device_map=None, **kwargs):
         super().__init__(config)
         self.config = config
 
@@ -530,6 +537,9 @@ class GPT_LAE(GPT, PyTorchModelHubMixin, PreTrainedModel):
         for pn, p in self.named_parameters():
             if pn.endswith('c_proj.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer))
+
+        if device_map is not None and '' in device_map:
+            self.to(device_map[''])
 
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params() / 1e6,))
@@ -613,7 +623,7 @@ class GPT_LAA(GPT, PyTorchModelHubMixin, PreTrainedModel):
     """
     config_class = GPTConfig
 
-    def __init__(self, config, **kwargs):
+    def __init__(self, config, device_map=None, **kwargs):
         super().__init__(config)
         self.config = config
 
@@ -638,6 +648,9 @@ class GPT_LAA(GPT, PyTorchModelHubMixin, PreTrainedModel):
         for pn, p in self.named_parameters():
             if pn.endswith('c_proj.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer))
+
+        if device_map is not None and '' in device_map:
+            self.to(device_map[''])
 
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params() / 1e6,))
