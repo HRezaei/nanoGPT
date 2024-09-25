@@ -29,7 +29,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 from transformers import AutoConfig, AutoModel, AutoModelForCausalLM
 
-from model import GPT, GPTLA, GPT_LAE, GPT_LAA, GPTLAConfig
+from model import GPT, GPTLA, GPT_LAE, GPT_LAA, GPTConfig
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
@@ -85,6 +85,11 @@ config = {k: globals()[k] for k in config_keys} # will be useful for logging
 # -----------------------------------------------------------------------------
 
 model_class = getattr(sys.modules[__name__], model_class_name)
+class_hf_names = {
+    "GPTLA": "nanoGPTLookAhead",
+    "GPT_LAE": "nanoGPTLookAheadE",
+    "GPT_LAA": "nanoGPTLookAheadA"
+}
 
 # various inits, derived attributes, I/O setup
 ddp = int(os.environ.get('RANK', -1)) != -1 # is this a ddp run?
@@ -173,7 +178,7 @@ if init_from == 'scratch':
     if meta_vocab_size is None:
         print("defaulting to vocab_size of GPT-2 to 50304 (50257 rounded up for efficiency)")
     model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else 50304
-    gptconf = GPTLAConfig(**model_args)
+    gptconf = GPTConfig(**model_args)
     model = model_class(gptconf)
 elif init_from == 'resume':
     print(f"Resuming training from {out_dir}")
@@ -186,7 +191,7 @@ elif init_from == 'resume':
     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
         model_args[k] = checkpoint_model_args[k]
     # create the model
-    gptconf = GPTLAConfig(**model_args)
+    gptconf = GPTConfig(**model_args)
     model = model_class(gptconf)
     state_dict = checkpoint['model']
     # fix the keys of the state dictionary :(
@@ -209,7 +214,7 @@ elif init_from.startswith('gpt2'):
 # crop down the model block size if desired, using model surgery
 if block_size < model.config.block_size:
     model.crop_block_size(block_size)
-    model_args['block_size'] = block_size # so that the checkpoint will have the right value
+    model_args['block_size'] = block_size  # so that the checkpoint will have the right value
 model.to(device)
 
 # initialize a GradScaler. If enabled=False scaler is a no-op
@@ -225,11 +230,12 @@ checkpoint = None # free up memory
 if compile:
     print("compiling the model... (takes a ~minute)")
     unoptimized_model = model
-    model = torch.compile(model) # requires PyTorch 2.0
+    model = torch.compile(model)  # requires PyTorch 2.0
 
 # wrap model into DDP container
 if ddp:
     model = DDP(model, device_ids=[ddp_local_rank])
+
 
 # helps estimate an arbitrarily accurate loss over either split using many batches
 @torch.no_grad()
@@ -247,6 +253,7 @@ def estimate_loss():
     model.train()
     return out
 
+
 # learning rate decay scheduler (cosine with warmup)
 def get_lr(it):
     # 1) linear warmup for warmup_iters steps
@@ -260,6 +267,7 @@ def get_lr(it):
     assert 0 <= decay_ratio <= 1
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
     return min_lr + coeff * (learning_rate - min_lr)
+
 
 # logging
 if wandb_log and master_process:
@@ -353,19 +361,21 @@ while True:
     if iter_num > max_iters:
         break
 
-AutoConfig.register("nanogpt", GPTLAConfig)
-AutoModel.register(GPTLAConfig, GPTLA)
-AutoModelForCausalLM.register(GPTLAConfig, GPTLA)
+AutoConfig.register("nanogpt", GPTConfig)
+AutoModel.register(GPTConfig, model_class)
+AutoModelForCausalLM.register(GPTConfig, model_class)
 
-GPTLAConfig.register_for_auto_class()
-GPTLA.register_for_auto_class("AutoModel")
-GPTLA.register_for_auto_class("AutoModelForCausalLM")
+GPTConfig.register_for_auto_class()
+model_class.register_for_auto_class("AutoModel")
+model_class.register_for_auto_class("AutoModelForCausalLM")
+
+model_hf_name = class_hf_names[model_class_name]
 
 # save locally
-model.save_pretrained("nanoGPTLookAhead")
+model.save_pretrained(model_hf_name)
 
 # push to the hub
-#model.push_to_hub("hrezaei/nanoGPTLookAhead", private=True)
+#model.push_to_hub(f"hrezaei/{model_hf_name}", private=True)
 
 if ddp:
     destroy_process_group()

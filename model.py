@@ -137,14 +137,18 @@ class GPTConfig(PretrainedConfig):
     })
 
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
         self.attribute_map["num_hidden_layers"] = "n_layer"
         self.attribute_map["hidden_size"] = "n_embd"
         self.auto_map = {
             "AutoConfig": "model.GPTConfig",
             "AutoModel": "model.GPT",
-            "AutoModelForCausalLM": "model.GPT"
+            "AutoModelForCausalLM": "model.GPT",
+            # This does not help to load tokenizer for the moment, and we need to
+            # push tokenizer using push_to_hub.py for the moment. However, I
+            # kept this line to find and fix the issue later:
+            "AutoTokenizer": ["transformers.GPT2TokenizerFast", "transformers.GPT2Tokenizer"]
         }
+        super().__init__(**kwargs)
 
 
 class GPT(PyTorchModelHubMixin, PreTrainedModel,
@@ -154,6 +158,10 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
     config_class = GPTConfig
 
     def __init__(self, config, **kwargs):
+        config.auto_map["AutoModel"] = f"model.{self.__class__.__name__}"
+        config.auto_map["AutoModelForCausalLM"] = f"model.{self.__class__.__name__}"
+        model_type = self.__class__.__name__.lower().replace("gpt", "").replace("_", "")
+        config.model_type = f"nanogpt_{model_type}"
         super().__init__(config)
         assert config.vocab_size is not None
         assert config.block_size is not None
@@ -408,29 +416,15 @@ class CausalLMOutputWithCrossAttentionsAndLookAhead(CausalLMOutputWithCrossAtten
     look_ahead_logits: torch.FloatTensor = None
 
 
-@dataclass
-class GPTLAConfig(GPTConfig):
-    auto_map: Dict[str, Any] = field(default_factory=lambda: {
-        "AutoConfig": "model.GPTLAConfig",
-        "AutoModel": "model.GPTLA"
-    })
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.auto_map = {
-            "AutoConfig": "model.GPTLAConfig",
-            "AutoModel": "model.GPTLA",
-            "AutoModelForCausalLM": "model.GPTLA"
-        }
-
-
 class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
-            repo_url="hrezaei/nanoGPTLookAhead",
+            repo_url="https://github.com/HRezaei/nanoGPT",
             pipeline_tag="text-generation",
             license="mit",):
-    config_class = GPTLAConfig
+    config_class = GPTConfig
 
     def __init__(self, config, **kwargs):
+        config.auto_map["AutoModel"] = f"model.{self.__class__.__name__}"
+        config.auto_map["AutoModelForCausalLM"] = f"model.{self.__class__.__name__}"
         super().__init__(config)
         assert config.vocab_size is not None
         assert config.block_size is not None
@@ -540,6 +534,7 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
 
 class GPT_LAE(GPT, PyTorchModelHubMixin, PreTrainedModel):
     config_class = GPTConfig
+
     def __init__(self, config, **kwargs):
         super().__init__(config)
         self.config = config
@@ -567,11 +562,15 @@ class GPT_LAE(GPT, PyTorchModelHubMixin, PreTrainedModel):
 
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params() / 1e6,))
-    def forward(self, idx, targets=None):
-        device = idx.device
-        b, t = idx.size()
+
+    def forward(self, input_ids, targets=None, output_hidden_states=False, past_key_values=None, **kwargs):
+        if past_key_values is None:
+            past_key_values = tuple([None] * len(self.transformer.h))
+
+        device = input_ids.device
+        b, t = input_ids.size()
         t += self.config.look_ahead_size
-        idx = torch.cat([idx, torch.zeros((idx.shape[0], self.config.look_ahead_size), dtype=torch.int64).to(device)], 1)
+        idx = torch.cat([input_ids, torch.zeros((input_ids.shape[0], self.config.look_ahead_size), dtype=torch.int64).to(device)], 1)
         assert t <= self.config.block_size + self.config.look_ahead_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}, and look ahead {self.config.look_ahead_size}"
         pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
 
@@ -579,8 +578,13 @@ class GPT_LAE(GPT, PyTorchModelHubMixin, PreTrainedModel):
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
         pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
         x = self.transformer.drop(tok_emb + pos_emb)
-        for block in self.transformer.h:
-            x = block(x)
+        presents = ()
+        all_hidden_states = ()
+        for (block, layer_past) in zip(self.transformer.h, past_key_values):
+            if output_hidden_states:
+                all_hidden_states = all_hidden_states + (x,)
+            (x, present) = block(x, layer_past=layer_past)
+            presents = presents + (present,)
         x = self.transformer.ln_f(x)
 
         if targets is not None:
@@ -592,8 +596,15 @@ class GPT_LAE(GPT, PyTorchModelHubMixin, PreTrainedModel):
             logits = self.lm_head(x[:, -(1+self.config.look_ahead_size):, :])
             loss = None
 
-        return logits, loss
-
+        return CausalLMOutputWithCrossAttentionsAndLookAhead(
+            loss=loss,
+            logits=logits[:, :-self.config.look_ahead_size],
+            past_key_values=presents,
+            hidden_states=all_hidden_states,  # For now, I don't need this
+            attentions=None,  # For now, I don't need this
+            cross_attentions=None,  # For now, I don't need this
+            look_ahead_logits=logits[:, -self.config.look_ahead_size:, :]
+        )
     @torch.no_grad()
     def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
         """
@@ -605,7 +616,8 @@ class GPT_LAE(GPT, PyTorchModelHubMixin, PreTrainedModel):
             # if the sequence context is growing too long we must crop it at block_size
             idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
             # forward the model to get the logits for the index in the sequence
-            logits, _ = self(idx_cond)
+            output = self(idx_cond)
+            logits = torch.cat([output.logits, output.look_ahead_logits], dim=1)
             # scale by desired temperature
             #logits = logits[:, -1, :] / temperature
             logits = logits / temperature
@@ -629,6 +641,7 @@ class GPT_LAA(GPT, PyTorchModelHubMixin, PreTrainedModel):
     Look ahead with Additional LM head to predict look ahead probabilites
     """
     config_class = GPTConfig
+
     def __init__(self, config, **kwargs):
         super().__init__(config)
         self.config = config
@@ -657,18 +670,27 @@ class GPT_LAA(GPT, PyTorchModelHubMixin, PreTrainedModel):
 
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params() / 1e6,))
-    def forward(self, idx, targets=None):
-        device = idx.device
-        b, t = idx.size()
+
+    def forward(self, input_ids, targets=None, output_hidden_states=False, past_key_values=None, **kwargs):
+        if past_key_values is None:
+            past_key_values = tuple([None] * len(self.transformer.h))
+
+        device = input_ids.device
+        b, t = input_ids.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         pos = torch.arange(0, t, dtype=torch.long, device=device)  # shape (t)
 
         # forward the GPT model itself
-        tok_emb = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
+        tok_emb = self.transformer.wte(input_ids)  # token embeddings of shape (b, t, n_embd)
         pos_emb = self.transformer.wpe(pos)  # position embeddings of shape (t, n_embd)
         x = self.transformer.drop(tok_emb + pos_emb)
-        for block in self.transformer.h:
-            x = block(x)
+        presents = ()
+        all_hidden_states = ()
+        for (block, layer_past) in zip(self.transformer.h, past_key_values):
+            if output_hidden_states:
+                all_hidden_states = all_hidden_states + (x,)
+            (x, present) = block(x, layer_past=layer_past)
+            presents = presents + (present,)
         x = self.transformer.ln_f(x)
 
         x_for_lookahead = x[:, [-1], :]
@@ -677,15 +699,22 @@ class GPT_LAA(GPT, PyTorchModelHubMixin, PreTrainedModel):
         if targets is not None:
             # if we are given some desired targets also calculate the loss
             logits = self.lm_head(x)
-            logits = torch.cat([logits, look_ahead_logits], dim=1)
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            all_logits = torch.cat([logits, look_ahead_logits], dim=1)
+            loss = F.cross_entropy(all_logits.view(-1, all_logits.size(-1)), targets.view(-1), ignore_index=-1)
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
-            logits = torch.cat([logits, look_ahead_logits], dim=1)
+            logits = self.lm_head(x[:, [-1], :])  # note: using list [-1] to preserve the time dim
             loss = None
 
-        return logits, loss
+        return CausalLMOutputWithCrossAttentionsAndLookAhead(
+            loss=loss,
+            logits=logits,
+            past_key_values=presents,
+            hidden_states=all_hidden_states,  # For now, I don't need this
+            attentions=None,  # For now, I don't need this
+            cross_attentions=None,  # For now, I don't need this
+            look_ahead_logits=look_ahead_logits
+        )
 
     @torch.no_grad()
     def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
@@ -698,7 +727,8 @@ class GPT_LAA(GPT, PyTorchModelHubMixin, PreTrainedModel):
             # if the sequence context is growing too long we must crop it at block_size
             idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
             # forward the model to get the logits for the index in the sequence
-            logits, _ = self(idx_cond)
+            outputs = self(idx_cond)
+            logits = torch.cat([outputs.logits, outputs.look_ahead_logits], dim=1)
             # scale by desired temperature
             #logits = logits[:, -1, :] / temperature
             logits = logits / temperature
