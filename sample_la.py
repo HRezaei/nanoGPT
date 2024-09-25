@@ -24,7 +24,6 @@ compile = False # use PyTorch 2.0 to compile the model to be faster
 
 model_class_name = 'GPTLA'
 look_ahead_size = 2
-look_ahead_mode = "expand"
 
 exec(open('configurator.py').read()) # overrides from command line or config file
 # -----------------------------------------------------------------------------

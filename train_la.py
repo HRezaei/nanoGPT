@@ -77,7 +77,6 @@ compile = True # use PyTorch 2.0 to compile the model to be faster
 
 model_class_name = 'GPT'
 look_ahead_size = 1
-look_ahead_mode = 'expand' # The other mode is "replicate". In expand, the input and the labels will be expanded by look_ahead_size. In replicate, the LM heads will be replicated each with a separate target
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
@@ -136,7 +135,7 @@ def get_batch(split):
 
     ix = torch.randint(len(data) - block_size - look_ahead_size, (batch_size,))
     x = torch.stack([torch.from_numpy((data[i:i + block_size]).astype(np.int64)) for i in ix])
-    if look_ahead_mode == "replicate":
+    if model_class_name == "GPTLA":
         ys = []
         for look_ahead in range(0, look_ahead_size + 1):
             # look_ahead=0 means the immediate next token as usual in original nanoGPT
