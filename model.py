@@ -396,10 +396,10 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
         return idx
 
 
-class GPT_LookAhead_Heads(nn.Module):
+class GPTLookAheadHeads(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.heads = nn.ModuleList([nn.Linear(config.n_embd, config.vocab_size, bias=False) for _ in range(config.look_ahead_size)])
+        self.heads = nn.ModuleList([nn.Linear(config.n_embd, config.vocab_size, bias=False) for _ in range(config.look_ahead_size+1)])
 
     def forward(self, x):
         # ModuleList can act as an iterable, or be indexed using ints
@@ -437,7 +437,7 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
         ))
-        self.lm_head = GPT_LookAhead_Heads(config)
+        self.lm_head = GPTLookAheadHeads(config)
         # with weight tying when using torch.compile() some warnings get generated:
         # "UserWarning: functional_call was passed multiple values for tied weights.
         # This behavior is deprecated and will be an error in future versions"
@@ -455,50 +455,21 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
         print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
 
     def forward(self, input_ids, targets=None, output_hidden_states=False, past_key_values=None, **kwargs):
-        if past_key_values is None:
-            past_key_values = tuple([None] * len(self.transformer.h))
-
-        device = input_ids.device
-        b, t = input_ids.size()
-        assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-        pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
-
-        # forward the GPT model itself
-        tok_emb = self.transformer.wte(input_ids) # token embeddings of shape (b, t, n_embd)
-        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
-        x = self.transformer.drop(tok_emb + pos_emb)
-        presents = ()
-        all_hidden_states = ()
-        for (block, layer_past) in zip(self.transformer.h, past_key_values):
-            if output_hidden_states:
-                all_hidden_states = all_hidden_states + (x,)
-            (x, present) = block(x, layer_past=layer_past)
-            presents = presents + (present, )
-        x = self.transformer.ln_f(x)
-
-        # I disabled Andrej's optimization, to make output the same shape as HF transformer models
-        logits = self.lm_head(x)
-        if targets is not None:
-            # if we are given some desired targets also calculate the loss
-            losses = []
-            for head_index in range(logits.shape[1]):
-                head_logits = logits[:, head_index]
-                head_targets = targets[head_index]
-                losses.append(F.cross_entropy(head_logits.reshape(-1, head_logits.size(-1)), head_targets.view(-1), ignore_index=-1))
-            loss = torch.mean(torch.stack(losses))
-        else:
-            # inference-time mini-optimization: only forward the lm_head on the very last position
-            #logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
-            loss = None
-
+        output = super().forward(
+            input_ids=input_ids,
+            targets=targets,
+            output_hidden_states=output_hidden_states,
+            past_key_values=past_key_values,
+            **kwargs
+        )
         return CausalLMOutputWithCrossAttentionsAndLookAhead(
-            loss=loss,
-            logits=logits[:, 0],
-            past_key_values=presents,
-            hidden_states=all_hidden_states,  # For now, I don't need this
+            loss=output.loss,
+            logits=output.logits[:, 0],
+            past_key_values=output.past_key_values,
+            hidden_states=output.hidden_states,  # For now, I don't need this
             attentions=None,  # For now, I don't need this
             cross_attentions=None,  # For now, I don't need this
-            look_ahead_logits=logits[:, 1:]
+            look_ahead_logits=output.logits[:, 1:]
         )
 
     @torch.no_grad()
