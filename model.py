@@ -129,6 +129,7 @@ class GPTConfig(PretrainedConfig):
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     look_ahead_size: int = 1
+    look_ahead_basis: str = "last_token"  # The other option is "past_tokens"
     model_type: str = "nanogpt"
     attribute_map: Dict[str, Any] = field(default_factory=lambda: {"num_hidden_layers": "n_layer"})
     auto_map: Dict[str, Any] = field(default_factory=lambda: {
@@ -680,8 +681,12 @@ class GPT_LAA(GPT, PyTorchModelHubMixin, PreTrainedModel):
             presents = presents + (present,)
         x = self.transformer.ln_f(x)
 
-        x_for_lookahead = x[:, [-1], :]
-        x_for_lookahead = torch.repeat_interleave(x_for_lookahead, self.config.look_ahead_size, dim=1)
+        if self.config.look_ahead_basis == "last_token":
+            x_for_lookahead = torch.repeat_interleave(x[:, [-1], :], self.config.look_ahead_size, dim=1)
+        elif self.config.look_ahead_basis == "past_tokens":
+            x_for_lookahead = x[:, -self.config.look_ahead_size:, :]
+        else:
+            raise NotImplemented
         look_ahead_logits = self.lm_head_lookahead(x_for_lookahead)
         if targets is not None:
             # if we are given some desired targets also calculate the loss
