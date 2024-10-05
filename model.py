@@ -272,8 +272,11 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
             if hasattr(block.attn, 'bias'):
                 block.attn.bias = block.attn.bias[:,:,:block_size,:block_size]
 
+    # This method is implemented by Andrej to resemble HF API. Now that the GPT class is
+    # inherited from HF classes, this no longer is needed. But I only renamed it from
+    # from_pretrained to from_pretrained_non_hf
     @classmethod
-    def from_pretrained2(cls, model_type, override_args=None):
+    def from_pretrained_non_hf(cls, model_type, override_args=None):
         print(model_type)
         assert model_type in {'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'}
         override_args = override_args or {} # default to empty dict
