@@ -193,7 +193,7 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
         if device_map is not None and '' in device_map:
             self.to(device_map[''])
 
-    def get_num_params(self, non_embedding=True):
+    def get_num_params(self, exclude_embeddings=True):
         """
         Return the number of parameters in the model.
         For non-embedding count (default), the position embeddings get subtracted.
@@ -201,7 +201,7 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
         params are actually used as weights in the final layer, so we include them.
         """
         n_params = sum(p.numel() for p in self.parameters())
-        if non_embedding:
+        if exclude_embeddings:
             n_params -= self.transformer.wpe.weight.numel()
         return n_params
 
