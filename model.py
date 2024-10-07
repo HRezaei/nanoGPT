@@ -193,9 +193,6 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
         if device_map is not None and '' in device_map:
             self.to(device_map[''])
 
-        # report number of parameters
-        print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
-
     def get_num_params(self, non_embedding=True):
         """
         Return the number of parameters in the model.
@@ -462,9 +459,6 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
         if device_map is not None and '' in device_map:
             self.to(device_map[''])
 
-        # report number of parameters
-        print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
-
     def forward(self, input_ids, targets=None, output_hidden_states=False, past_key_values=None, **kwargs):
         output = super().forward(
             input_ids=input_ids,
@@ -544,9 +538,6 @@ class GPT_LAE(GPT, PyTorchModelHubMixin, PreTrainedModel):
 
         if device_map is not None and '' in device_map:
             self.to(device_map[''])
-
-        # report number of parameters
-        print("number of parameters: %.2fM" % (self.get_num_params() / 1e6,))
 
     def forward(self, input_ids, targets=None, output_hidden_states=False, past_key_values=None, **kwargs):
         if past_key_values is None:
@@ -655,9 +646,6 @@ class GPT_LAA(GPT, PyTorchModelHubMixin, PreTrainedModel):
 
         if device_map is not None and '' in device_map:
             self.to(device_map[''])
-
-        # report number of parameters
-        print("number of parameters: %.2fM" % (self.get_num_params() / 1e6,))
 
     def forward(self, input_ids, targets=None, output_hidden_states=False, past_key_values=None, **kwargs):
         if past_key_values is None:
