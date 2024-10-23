@@ -342,11 +342,12 @@ GPTConfig.register_for_auto_class()
 GPT.register_for_auto_class("AutoModel")
 GPT.register_for_auto_class("AutoModelForCausalLM")
 
+model_name = "nanoGPT"
 # save locally
-model.save_pretrained("nanoGPT")
+model.save_pretrained(model_name)
 
 print("pushing")
-model.push_to_hub("hrezaei/nanoGPT", private=True)
+model.push_to_hub(f"hrezaei/{model_name}", private=True)
 print("push completed")
 print(model)
 
