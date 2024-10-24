@@ -243,12 +243,16 @@ def estimate_loss():
     model.eval()
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
+        individual_losses = torch.zeros((eval_iters, look_ahead_size+1))
         for k in range(eval_iters):
             X, Y = get_batch(split)
-            with ctx:
-                loss = model(X, Y).loss
+            with (ctx):
+                outcome = model(X, Y)
+                loss = outcome.loss
             losses[k] = loss.item()
+            individual_losses[k] = outcome.individual_losses
         out[split] = losses.mean()
+        out[split + "_individual_losses"] = individual_losses.mean(dim=0)
     model.train()
     return out
 
@@ -291,13 +295,19 @@ while True:
         losses = estimate_loss()
         print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
         if wandb_log:
-            wandb.log({
+            log = {
                 "iter": iter_num,
                 "train/loss": losses['train'],
                 "val/loss": losses['val'],
+                "train/original_loss": losses['train_individual_losses'][0].item(),
+                "val/original_loss": losses['val_individual_losses'][0].item(),
                 "lr": lr,
                 "mfu": running_mfu*100, # convert to percentage
-            })
+            }
+            for i in range(look_ahead_size):
+                for split in ['train', 'val']:
+                    log[f"{split}/lookahead_loss{i+1}"] = losses[f"{split}_individual_losses"][i].item()
+            wandb.log(log)
         if losses['val'] < best_val_loss or always_save_checkpoint:
             best_val_loss = losses['val']
             if iter_num > 0:

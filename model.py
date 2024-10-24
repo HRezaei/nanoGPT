@@ -419,6 +419,12 @@ class GPTLookAheadHeads(nn.Module):
 @dataclass
 class CausalLMOutputWithCrossAttentionsAndLookAhead(CausalLMOutputWithCrossAttentions):
     look_ahead_logits: torch.FloatTensor = None
+    individual_losses: torch.FloatTensor = None
+
+
+def compute_loss(logits, targets):
+    loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+    return loss
 
 
 class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
@@ -467,6 +473,13 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
             past_key_values=past_key_values,
             **kwargs
         )
+
+        individual_losses = []
+        for i in range(self.config.look_ahead_size+1):
+            individual_losses.append(
+                compute_loss(output.logits[:, i].contiguous(), targets[:, i].contiguous())
+            )
+
         return CausalLMOutputWithCrossAttentionsAndLookAhead(
             loss=output.loss,
             logits=output.logits[:, 0],
@@ -474,7 +487,8 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
             hidden_states=output.hidden_states,  # For now, I don't need this
             attentions=None,  # For now, I don't need this
             cross_attentions=None,  # For now, I don't need this
-            look_ahead_logits=output.logits[:, 1:]
+            look_ahead_logits=output.logits[:, 1:],
+            individual_losses=torch.stack(individual_losses)
         )
 
     @torch.no_grad()
@@ -562,11 +576,18 @@ class GPT_LAE(GPT, PyTorchModelHubMixin, PreTrainedModel):
             (x, present) = block(x, layer_past=layer_past)
             presents = presents + (present,)
         x = self.transformer.ln_f(x)
-
+        individual_losses = []
         if targets is not None:
             # if we are given some desired targets also calculate the loss
             logits = self.lm_head(x)
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            loss = compute_loss(logits, targets)
+            original_loss = compute_loss(logits[:, :self.config.block_size].contiguous(),
+                                         targets[:, :self.config.block_size].contiguous())
+            individual_losses.append(original_loss)
+            for i in range(self.config.look_ahead_size):
+                individual_losses.append(
+                    compute_loss(logits[:, self.config.block_size+i], targets[:, self.config.block_size+i])
+                )
         else:
             # inference-time mini-optimization: only forward the lm_head on the last position + look ahead positions:
             logits = self.lm_head(x[:, -(1+self.config.look_ahead_size):, :])
@@ -579,7 +600,8 @@ class GPT_LAE(GPT, PyTorchModelHubMixin, PreTrainedModel):
             hidden_states=all_hidden_states,  # For now, I don't need this
             attentions=None,  # For now, I don't need this
             cross_attentions=None,  # For now, I don't need this
-            look_ahead_logits=logits[:, -self.config.look_ahead_size:, :]
+            look_ahead_logits=logits[:, -self.config.look_ahead_size:, :],
+            individual_losses=torch.stack(individual_losses)
         )
     @torch.no_grad()
     def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
@@ -650,7 +672,9 @@ class GPT_LAA(GPT, PyTorchModelHubMixin, PreTrainedModel):
     def forward(self, input_ids, targets=None, output_hidden_states=False, past_key_values=None, **kwargs):
         if past_key_values is None:
             past_key_values = tuple([None] * len(self.transformer.h))
-
+        """
+        targets shape: (batch_size, block_size+lookahead_size)
+        """
         device = input_ids.device
         b, t = input_ids.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
@@ -676,11 +700,19 @@ class GPT_LAA(GPT, PyTorchModelHubMixin, PreTrainedModel):
         else:
             raise NotImplemented
         look_ahead_logits = self.lm_head_lookahead(x_for_lookahead)
+        individual_losses = []
         if targets is not None:
             # if we are given some desired targets also calculate the loss
             logits = self.lm_head(x)
             all_logits = torch.cat([logits, look_ahead_logits], dim=1)
-            loss = F.cross_entropy(all_logits.view(-1, all_logits.size(-1)), targets.view(-1), ignore_index=-1)
+            loss = compute_loss(all_logits, targets)
+
+            original_loss = compute_loss(logits, targets[:, :self.config.block_size].contiguous())
+            individual_losses.append(original_loss)
+            for i in range(self.config.look_ahead_size):
+                individual_losses.append(
+                    compute_loss(look_ahead_logits[:, i], targets[:, self.config.block_size+i])
+                )
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
             logits = self.lm_head(x[:, [-1], :])  # note: using list [-1] to preserve the time dim
@@ -693,7 +725,8 @@ class GPT_LAA(GPT, PyTorchModelHubMixin, PreTrainedModel):
             hidden_states=all_hidden_states,  # For now, I don't need this
             attentions=None,  # For now, I don't need this
             cross_attentions=None,  # For now, I don't need this
-            look_ahead_logits=look_ahead_logits
+            look_ahead_logits=look_ahead_logits,
+            individual_losses=torch.stack(individual_losses)
         )
 
     @torch.no_grad()
