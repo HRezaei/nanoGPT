@@ -310,9 +310,9 @@ while True:
                 "lr": lr,
                 "mfu": running_mfu*100, # convert to percentage
             }
-            for i in range(look_ahead_size):
+            for i in range(1, look_ahead_size+1):
                 for split in ['train', 'val']:
-                    log[f"{split}/lookahead_loss{i+1}"] = losses[f"{split}_individual_losses"][i].item()
+                    log[f"{split}/lookahead_loss{i}"] = losses[f"{split}_individual_losses"][i].item()
             wandb.log(log)
         if losses['val'] < best_val_loss or always_save_checkpoint:
             best_val_loss = losses['val']
