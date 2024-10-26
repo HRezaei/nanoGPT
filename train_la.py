@@ -275,10 +275,12 @@ def get_lr(it):
 # logging
 if wandb_log and master_process:
     import wandb
+    config_for_wandb = config.copy()
+    config_for_wandb["Slurm_job_file_content"] = os.environ.get("SLRUM_JOB_FILE_CONTENT", "not set")
     wandb.init(
         project=wandb_project,
         name=wandb_run_name,
-        config=config,
+        config=config_for_wandb,
         save_code=True,
         settings=wandb.Settings(code_dir="."),
     )
