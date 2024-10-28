@@ -474,7 +474,9 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
             **kwargs
         )
 
-        individual_losses = []
+        # For this model, we don't differentiate between loss on input tokens and next token
+        individual_losses = [torch.tensor(0, device=output.loss.device)]
+        # So we only will have one loss for original head and one loss per lookahead heads:
         for i in range(self.config.look_ahead_size+1):
             individual_losses.append(
                 compute_loss(output.logits[:, i].contiguous(), targets[:, i].contiguous())
@@ -515,7 +517,66 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
             probs = F.softmax(logits, dim=-1)
             # sample from the distribution
             for i in range(probs.size(0)):
-                idx_next = torch.multinomial(probs[i, None], num_samples=1)
+                idx_next = torch.multinomial(probs[i, None], num_samples=100)
+                # append sampled index to the running sequence and continue
+                idx = torch.cat((idx, idx_next), dim=1)
+
+        return idx
+
+    @torch.no_grad()
+    def generate_lookahead(self, idx, max_new_tokens, temperature=1.0, top_k=None):
+        """
+        Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
+        the sequence max_new_tokens times, feeding the predictions back into the model each time.
+        Most likely you'll want to make sure to be in model.eval() mode of operation for this.
+        """
+        past_key_values = None
+        for _ in range(max_new_tokens // (self.config.look_ahead_size + 1)):
+            # if the sequence context is growing too long we must crop it at block_size
+            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+            # forward the model to get the logits for the index in the sequence
+            output = self(idx_cond)
+            logits = torch.cat([output.logits.unsqueeze(1), output.look_ahead_logits], dim=1)
+            # pluck the logits at the final step and scale by desired temperature
+            logits = logits[:, :, -1, :] / temperature
+            # optionally crop the logits to only the top k options
+            if top_k is not None:
+                logits = logits.squeeze(0)
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                logits[logits < v[:, [-1]]] = -float('Inf')
+            # apply softmax to convert logits to (normalized) probabilities
+            probs = F.softmax(logits, dim=-1)
+            samples = torch.multinomial(probs, num_samples=3)
+            # sample from the distribution
+            # for i in range(1, samples.size(0)):
+            products = torch.cartesian_prod(*samples)
+            if past_key_values is None:
+                prompt_plus_candidates = torch.cat([
+                    torch.expand_copy(idx_cond, (products.shape[0], idx_cond.shape[1])),
+                    products
+                ], dim=1)
+                verification_logits = self.forward(prompt_plus_candidates)
+                past_key_values = verification_logits.past_key_values
+                verification_logits = verification_logits.logits[:, -probs.shape[0] - 1:-1, :]
+            else:
+                prompt_plus_candidates = torch.cat([
+                    torch.expand_copy(idx_cond[0, -1], (products.shape[0], 1)),
+                    products
+                ], dim=1)
+                verification_logits = self.forward(prompt_plus_candidates, past_key_values=past_key_values)
+                past_key_values = verification_logits.past_key_values
+                verification_logits = verification_logits.logits[:, :-1, :]
+            # Discard logits for the next token and for the prompt tokens except the last token of prompt:
+            verified_candidates = []
+            for candidate_index, candidate in enumerate(products):
+                for token_index, token in enumerate(candidate):
+                    if torch.argmax(verification_logits[candidate_index, token_index]) == candidate[token_index]:
+                        break
+                else:
+                    verified_candidates.append(candidate)
+
+            if len(verified_candidates) > 0:
+                idx_next = verified_candidates[0].unsqueeze(0)
                 # append sampled index to the running sequence and continue
                 idx = torch.cat((idx, idx_next), dim=1)
 
@@ -580,14 +641,19 @@ class GPT_LAE(GPT, PyTorchModelHubMixin, PreTrainedModel):
         if targets is not None:
             # if we are given some desired targets also calculate the loss
             logits = self.lm_head(x)
-            loss = compute_loss(logits, targets)
-            original_loss = compute_loss(logits[:, :self.config.block_size].contiguous(),
-                                         targets[:, :self.config.block_size].contiguous())
-            individual_losses.append(original_loss)
+            #loss = compute_loss(logits, targets)
+            # Loss of tokens present in input prompt:
+            input_loss = compute_loss(logits[:, :self.config.block_size-1].contiguous(),
+                                         targets[:, :self.config.block_size-1].contiguous())
+            # Loss of the immediately next token following input prompt:
+            next_token_loss = compute_loss(logits[:, self.config.block_size-1].contiguous(),
+                                         targets[:, self.config.block_size-1].contiguous())
+            individual_losses = [input_loss, next_token_loss]
             for i in range(self.config.look_ahead_size):
                 individual_losses.append(
                     compute_loss(logits[:, self.config.block_size+i], targets[:, self.config.block_size+i])
                 )
+            loss = sum(individual_losses) / len(individual_losses)
         else:
             # inference-time mini-optimization: only forward the lm_head on the last position + look ahead positions:
             logits = self.lm_head(x[:, -(1+self.config.look_ahead_size):, :])
@@ -704,15 +770,19 @@ class GPT_LAA(GPT, PyTorchModelHubMixin, PreTrainedModel):
         if targets is not None:
             # if we are given some desired targets also calculate the loss
             logits = self.lm_head(x)
-            all_logits = torch.cat([logits, look_ahead_logits], dim=1)
-            loss = compute_loss(all_logits, targets)
+            #all_logits = torch.cat([logits, look_ahead_logits], dim=1)
+            #loss = compute_loss(all_logits, targets)
 
-            original_loss = compute_loss(logits, targets[:, :self.config.block_size].contiguous())
-            individual_losses.append(original_loss)
+            # Loss of all tokens present in input prompt
+            input_loss = compute_loss(logits[:, :-1].contiguous(), targets[:, :self.config.block_size-1].contiguous())
+            # Loss of the immediately next token after input prompt
+            next_token_loss = compute_loss(logits[:, -1], targets[:, self.config.block_size-1].contiguous())
+            individual_losses = [input_loss, next_token_loss]
             for i in range(self.config.look_ahead_size):
                 individual_losses.append(
                     compute_loss(look_ahead_logits[:, i], targets[:, self.config.block_size+i])
                 )
+            loss = sum(individual_losses) / len(individual_losses)
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
             logits = self.lm_head(x[:, [-1], :])  # note: using list [-1] to preserve the time dim
