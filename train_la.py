@@ -45,6 +45,7 @@ init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
 wandb_log = False # disabled by default
 wandb_project = 'owt'
 wandb_run_name = 'gpt2' # 'run' + str(time.time())
+wandb_run_id = '' # Used for resume
 # data
 dataset = 'openwebtext'
 gradient_accumulation_steps = 5 * 8 # used to simulate larger batch sizes
@@ -77,7 +78,7 @@ compile = True # use PyTorch 2.0 to compile the model to be faster
 
 model_class_name = 'GPT'
 look_ahead_size = 1
-look_ahead_basis = 'last_token'
+look_ahead_basis = 'last_token' # The other option is "past_tokens"
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
@@ -284,6 +285,8 @@ if wandb_log and master_process:
         config=config_for_wandb,
         save_code=True,
         settings=wandb.Settings(code_dir="."),
+        id=wandb_run_id if len(wandb_run_id)>0 else None,
+        resume="must"
     )
 
 # training loop

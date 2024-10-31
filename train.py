@@ -44,6 +44,7 @@ init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
 wandb_log = False # disabled by default
 wandb_project = 'owt'
 wandb_run_name = 'gpt2' # 'run' + str(time.time())
+wandb_run_id = ''  # Used for resume
 # data
 dataset = 'openwebtext'
 gradient_accumulation_steps = 5 * 8 # used to simulate larger batch sizes
@@ -251,6 +252,8 @@ if wandb_log and master_process:
         config=config,
         save_code=True,
         settings=wandb.Settings(code_dir="."),
+        id=wandb_run_id if len(wandb_run_id)>0 else None,
+        resume="must"
     )
 
 # training loop
