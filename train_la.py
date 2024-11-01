@@ -79,10 +79,11 @@ compile = True # use PyTorch 2.0 to compile the model to be faster
 model_class_name = 'GPT'
 look_ahead_size = 1
 look_ahead_basis = 'last_token' # The other option is "past_tokens"
+cross_entropy_loss_reduction = 'mean'
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
-config = {k: globals()[k] for k in config_keys} # will be useful for logging
+config = {k: globals()[k] for k in config_keys}  # will be useful for logging
 # -----------------------------------------------------------------------------
 
 model_class = getattr(sys.modules[__name__], model_class_name)
@@ -170,7 +171,8 @@ if os.path.exists(meta_path):
 
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
-                  bias=bias, vocab_size=None, dropout=dropout, look_ahead_size=look_ahead_size) # start with model_args from command line
+                  bias=bias, vocab_size=None, dropout=dropout, look_ahead_size=look_ahead_size,
+                  cross_entropy_loss_reduction=cross_entropy_loss_reduction)  # start with model_args from command line
 if init_from == 'scratch':
     # init a new model from scratch
     print("Initializing a new model from scratch")

@@ -31,6 +31,7 @@ class LayerNorm(nn.Module):
     def forward(self, input):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 
+
 class CausalSelfAttention(nn.Module):
 
     def __init__(self, config):
@@ -88,6 +89,7 @@ class CausalSelfAttention(nn.Module):
         present = (k, v) # retrun key values to comply with HF transformers API
         return y, present
 
+
 class MLP(nn.Module):
 
     def __init__(self, config):
@@ -104,6 +106,7 @@ class MLP(nn.Module):
         x = self.dropout(x)
         return x
 
+
 class Block(nn.Module):
 
     def __init__(self, config):
@@ -119,15 +122,16 @@ class Block(nn.Module):
         x = x + self.mlp(self.ln_2(x))
         return x, presents
 
+
 @dataclass
 class GPTConfig(PretrainedConfig):
     block_size: int = 1024
-    vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
+    vocab_size: int = 50304  # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
     dropout: float = 0.0
-    bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
+    bias: bool = True  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     look_ahead_size: int = 1
     look_ahead_basis: str = "last_token"  # The other option is "past_tokens"
     model_type: str = "nanogpt"
@@ -136,6 +140,7 @@ class GPTConfig(PretrainedConfig):
         "AutoConfig": "model.GPTConfig",
         "AutoModel": "model.GPT"
     })
+    cross_entropy_loss_reduction: str = "mean"
 
     def __init__(self, **kwargs):
         self.attribute_map["num_hidden_layers"] = "n_layer"
@@ -213,6 +218,10 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
+    def compute_loss(self, logits, targets):
+        return F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1,
+                               reduction=self.config.cross_entropy_loss_reduction)
+
     def forward(self,
                 input_ids,
                 targets=None,
@@ -247,11 +256,11 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
         individual_losses = []
         if targets is not None:
             # if we are given some desired targets also calculate the loss
-            loss = compute_loss(logits, targets)
-            individual_losses = [
-                compute_loss(logits[:, :-1].contiguous(), targets[:, :-1].contiguous()),
-                compute_loss(logits[:, [-1]], targets[:, [-1]])
-            ]
+            loss = self.compute_loss(logits[:, [-1]], targets[:, [-1]])
+            individual_losses = torch.stack([
+                self.compute_loss(logits[:, :-1].contiguous(), targets[:, :-1].contiguous()),
+                self.compute_loss(logits[:, [-1]], targets[:, [-1]])
+            ])
         else:
             loss = None
 
@@ -262,7 +271,7 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
             hidden_states=all_hidden_states,  # For now, I don't need this
             attentions=None,  # For now, I don't need this
             cross_attentions=None,  # For now, I don't need this
-        ), torch.stack(individual_losses)
+        ), individual_losses
 
     def crop_block_size(self, block_size):
         # model surgery to decrease the block size if necessary
@@ -389,7 +398,8 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
             # if the sequence context is growing too long we must crop it at block_size
             idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
             # forward the model to get the logits for the index in the sequence
-            logits = self(idx_cond).logits
+            outcome, individual_losses = self(idx_cond)
+            logits = outcome.logits
             # pluck the logits at the final step and scale by desired temperature
             logits = logits[:, -1, :] / temperature
             # optionally crop the logits to only the top k options
@@ -425,11 +435,6 @@ class GPTLookAheadHeads(nn.Module):
 class CausalLMOutputWithCrossAttentionsAndLookAhead(CausalLMOutputWithCrossAttentions):
     look_ahead_logits: torch.FloatTensor = None
     individual_losses: torch.FloatTensor = None
-
-
-def compute_loss(logits, targets):
-    loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
-    return loss
 
 
 class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
@@ -484,7 +489,7 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
         # So we only will have one loss for original head and one loss per lookahead heads:
         for i in range(self.config.look_ahead_size+1):
             individual_losses.append(
-                compute_loss(output.logits[:, i].contiguous(), targets[:, i].contiguous())
+                self.compute_loss(output.logits[:, i].contiguous(), targets[:, i].contiguous())
             )
 
         return CausalLMOutputWithCrossAttentionsAndLookAhead(
@@ -648,15 +653,15 @@ class GPT_LAE(GPT, PyTorchModelHubMixin, PreTrainedModel):
             logits = self.lm_head(x)
             #loss = compute_loss(logits, targets)
             # Loss of tokens present in input prompt:
-            input_loss = compute_loss(logits[:, :self.config.block_size-1].contiguous(),
+            input_loss = self.compute_loss(logits[:, :self.config.block_size-1].contiguous(),
                                          targets[:, :self.config.block_size-1].contiguous())
             # Loss of the immediately next token following input prompt:
-            next_token_loss = compute_loss(logits[:, self.config.block_size-1].contiguous(),
+            next_token_loss = self.compute_loss(logits[:, self.config.block_size-1].contiguous(),
                                          targets[:, self.config.block_size-1].contiguous())
             individual_losses = [input_loss, next_token_loss]
             for i in range(self.config.look_ahead_size):
                 individual_losses.append(
-                    compute_loss(logits[:, self.config.block_size+i], targets[:, self.config.block_size+i])
+                    self.compute_loss(logits[:, self.config.block_size+i], targets[:, self.config.block_size+i])
                 )
             loss = sum(individual_losses) / len(individual_losses)
         else:
@@ -779,13 +784,13 @@ class GPT_LAA(GPT, PyTorchModelHubMixin, PreTrainedModel):
             #loss = compute_loss(all_logits, targets)
 
             # Loss of all tokens present in input prompt
-            input_loss = compute_loss(logits[:, :-1].contiguous(), targets[:, :self.config.block_size-1].contiguous())
+            input_loss = self.compute_loss(logits[:, :-1].contiguous(), targets[:, :self.config.block_size-1].contiguous())
             # Loss of the immediately next token after input prompt
-            next_token_loss = compute_loss(logits[:, -1], targets[:, self.config.block_size-1].contiguous())
+            next_token_loss = self.compute_loss(logits[:, -1], targets[:, self.config.block_size-1].contiguous())
             individual_losses = [input_loss, next_token_loss]
             for i in range(self.config.look_ahead_size):
                 individual_losses.append(
-                    compute_loss(look_ahead_logits[:, i], targets[:, self.config.block_size+i])
+                    self.compute_loss(look_ahead_logits[:, i], targets[:, self.config.block_size+i])
                 )
             loss = sum(individual_losses) / len(individual_losses)
         else:
