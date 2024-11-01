@@ -220,12 +220,16 @@ def estimate_loss():
     model.eval()
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
+        individual_losses = torch.zeros((eval_iters, 2))
         for k in range(eval_iters):
             iteration_x, iteration_y = get_batch(split)
             with ctx:
-                iteration_loss = model(iteration_x, targets=iteration_y).loss
+                outcome, micro_losses = model(iteration_x, targets=iteration_y)
+                iteration_loss = outcome.loss
             losses[k] = iteration_loss.item()
+            individual_losses[k] = micro_losses
         out[split] = losses.mean()
+        out[split + "_individual_losses"] = individual_losses.mean(dim=0)
     model.train()
     return out
 
@@ -246,10 +250,13 @@ def get_lr(it):
 # logging
 if wandb_log and master_process:
     import wandb
+    config_for_wandb = config.copy()
+    config_for_wandb["Slurm_job_file_content"] = os.environ.get("SLRUM_JOB_FILE_CONTENT", "not set")
+    config_for_wandb["Slurm_job_id"] = os.environ.get("SLURM_JOB_ID", "not set")
     wandb.init(
         project=wandb_project,
         name=wandb_run_name,
-        config=config,
+        config=config_for_wandb,
         save_code=True,
         settings=wandb.Settings(code_dir="."),
         id=wandb_run_id if len(wandb_run_id)>0 else None,
@@ -278,6 +285,10 @@ while True:
                 "iter": iter_num,
                 "train/loss": losses['train'],
                 "val/loss": losses['val'],
+                "train/input_loss": losses['train_individual_losses'][0].item(),
+                "val/input_loss": losses['val_individual_losses'][0].item(),
+                "train/next_token_loss": losses['train_individual_losses'][1].item(),
+                "val/next_token_loss": losses['val_individual_losses'][1].item(),
                 "lr": lr,
                 "mfu": running_mfu*100, # convert to percentage
             })

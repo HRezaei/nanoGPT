@@ -244,9 +244,14 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
 
         # I disabled inference-time mini-optimization done by Andrej because GLAM requires other layers:
         logits = self.lm_head(x)
+        individual_losses = []
         if targets is not None:
             # if we are given some desired targets also calculate the loss
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            loss = compute_loss(logits, targets)
+            individual_losses = [
+                compute_loss(logits[:, :-1].contiguous(), targets[:, :-1].contiguous()),
+                compute_loss(logits[:, [-1]], targets[:, [-1]])
+            ]
         else:
             loss = None
 
@@ -257,7 +262,7 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
             hidden_states=all_hidden_states,  # For now, I don't need this
             attentions=None,  # For now, I don't need this
             cross_attentions=None,  # For now, I don't need this
-        )
+        ), torch.stack(individual_losses)
 
     def crop_block_size(self, block_size):
         # model surgery to decrease the block size if necessary
