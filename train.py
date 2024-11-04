@@ -24,6 +24,7 @@ from contextlib import nullcontext
 
 import numpy as np
 import torch
+from numpy import mean
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 from transformers import AutoConfig, AutoModel, AutoModelForCausalLM
@@ -224,16 +225,29 @@ def estimate_loss():
     model.eval()
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
-        individual_losses = torch.zeros((eval_iters, 2))
+        individual_losses = {}
+        individual_times = {}
         for k in range(eval_iters):
             iteration_x, iteration_y = get_batch(split)
             with ctx:
-                outcome, micro_losses = model(iteration_x, targets=iteration_y)
+                outcome, micro_losses, elapsed_times = model(iteration_x, targets=iteration_y)
                 iteration_loss = outcome.loss
             losses[k] = iteration_loss.item()
-            individual_losses[k] = micro_losses
-        out[split] = losses.mean()
-        out[split + "_individual_losses"] = individual_losses.mean(dim=0)
+            for key, value in micro_losses.items():
+                if key not in individual_losses:
+                    individual_losses[key] = []
+                    individual_times[key] = []
+                individual_losses[key].append(value)
+                individual_times[key].append(elapsed_times[key])
+
+        out[split + "/loss"] = losses.mean()
+        for key, value in individual_losses.items():
+            if key == 'loss':
+                out[split + f"/{key}_time"] = mean(individual_times[key])
+            else:
+                out[split + f"/{key}_loss"] = mean(value)
+                out[split + f"/{key}_loss_time"] = mean(individual_times[key])
+
     model.train()
     return out
 
@@ -283,21 +297,17 @@ while True:
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
         losses = estimate_loss()
-        print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+        print(f"step {iter_num}: train loss {losses['train/loss']:.4f}, val loss {losses['val/loss']:.4f}")
         if wandb_log:
-            wandb.log({
+            log = losses
+            log.update({
                 "iter": iter_num,
-                "train/loss": losses['train'],
-                "val/loss": losses['val'],
-                "train/input_loss": losses['train_individual_losses'][0].item(),
-                "val/input_loss": losses['val_individual_losses'][0].item(),
-                "train/next_token_loss": losses['train_individual_losses'][1].item(),
-                "val/next_token_loss": losses['val_individual_losses'][1].item(),
                 "lr": lr,
-                "mfu": running_mfu*100, # convert to percentage
+                "mfu": running_mfu*100,  # convert to percentage
             })
-        if losses['val'] < best_val_loss or always_save_checkpoint:
-            best_val_loss = losses['val']
+            wandb.log(log)
+        if losses['val/loss'] < best_val_loss or always_save_checkpoint:
+            best_val_loss = losses['val/loss']
             if iter_num > 0:
                 checkpoint = {
                     'model': raw_model.state_dict(),
@@ -322,8 +332,9 @@ while True:
             # looking at the source of that context manager, it just toggles this variable
             model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
         with ctx:
-            outcome, individual_losses = model(X, Y)
-            loss = outcome.loss / gradient_accumulation_steps  # scale the loss to account for gradient accumulation
+            outcome, _, _ = model(X, Y)
+            loss = outcome.loss
+            loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         X, Y = get_batch('train')
         # backward pass, with gradient scaling if training in fp16

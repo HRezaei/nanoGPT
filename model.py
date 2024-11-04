@@ -9,6 +9,7 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 
 import math
 import inspect
+import time
 from dataclasses import dataclass, field
 from typing import Dict, Any
 
@@ -253,14 +254,22 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
 
         # I disabled inference-time mini-optimization done by Andrej because GLAM requires other layers:
         logits = self.lm_head(x)
-        individual_losses = []
+        individual_losses = {}
+        elapsed_times = {}
         if targets is not None:
             # if we are given some desired targets also calculate the loss
-            loss = self.compute_loss(logits[:, [-1]], targets[:, [-1]])
-            individual_losses = torch.stack([
-                self.compute_loss(logits[:, :-1].contiguous(), targets[:, :-1].contiguous()),
-                self.compute_loss(logits[:, [-1]], targets[:, [-1]])
-            ])
+            start = time.time()
+            loss = self.compute_loss(logits, targets)
+            individual_losses['loss'] = loss.item()
+            elapsed_times['loss'] = time.time() - start
+
+            start = time.time()
+            individual_losses['input'] = self.compute_loss(logits[:, :-1].contiguous(), targets[:, :-1].contiguous()).item()
+            elapsed_times['input'] = time.time() - start
+
+            start = time.time()
+            individual_losses['next_token'] = self.compute_loss(logits[:, [-1]], targets[:, [-1]]).item()
+            elapsed_times['next_token'] = time.time() - start
         else:
             loss = None
 
@@ -271,7 +280,7 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
             hidden_states=all_hidden_states,  # For now, I don't need this
             attentions=None,  # For now, I don't need this
             cross_attentions=None,  # For now, I don't need this
-        ), individual_losses
+        ), individual_losses, elapsed_times
 
     def crop_block_size(self, block_size):
         # model surgery to decrease the block size if necessary
