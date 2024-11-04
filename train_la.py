@@ -77,6 +77,7 @@ dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported
 compile = True # use PyTorch 2.0 to compile the model to be faster
 
 model_class_name = 'GPT'
+model_config_class_name = 'GPTConfig'
 look_ahead_size = 1
 look_ahead_basis = 'last_token' # The other option is "past_tokens"
 cross_entropy_loss_reduction = 'mean'
@@ -87,6 +88,7 @@ config = {k: globals()[k] for k in config_keys}  # will be useful for logging
 # -----------------------------------------------------------------------------
 
 model_class = getattr(sys.modules[__name__], model_class_name)
+model_config_class = getattr(sys.modules[__name__], model_config_class_name)
 class_hf_names = {
     "GPTLA": "nanoGPTLookAhead",
     "GPT_LAE": "nanoGPTLookAheadE",
@@ -180,7 +182,7 @@ if init_from == 'scratch':
     if meta_vocab_size is None:
         print("defaulting to vocab_size of GPT-2 to 50304 (50257 rounded up for efficiency)")
     model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else 50304
-    gptconf = GPTConfig(**model_args)
+    gptconf = model_config_class(**model_args)
     model = model_class(gptconf)
 elif init_from == 'resume':
     print(f"Resuming training from {out_dir}")
@@ -193,7 +195,7 @@ elif init_from == 'resume':
     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
         model_args[k] = checkpoint_model_args[k]
     # create the model
-    gptconf = GPTConfig(**model_args)
+    gptconf = model_config_class(**model_args)
     model = model_class(gptconf)
     state_dict = checkpoint['model']
     # fix the keys of the state dictionary :(
@@ -386,11 +388,11 @@ while True:
     if iter_num > max_iters:
         break
 
-AutoConfig.register("nanogpt", GPTConfig)
-AutoModel.register(GPTConfig, model_class)
-AutoModelForCausalLM.register(GPTConfig, model_class)
+AutoConfig.register("nanogpt", model_config_class)
+AutoModel.register(model_config_class, model_class)
+AutoModelForCausalLM.register(model_config_class, model_class)
 
-GPTConfig.register_for_auto_class()
+model_config_class.register_for_auto_class()
 model_class.register_for_auto_class("AutoModel")
 model_class.register_for_auto_class("AutoModelForCausalLM")
 
