@@ -283,14 +283,20 @@ if wandb_log and master_process:
     config_for_wandb = config.copy()
     config_for_wandb["Slurm_job_file_content"] = os.environ.get("SLRUM_JOB_FILE_CONTENT", "not set")
     config_for_wandb["Slurm_job_id"] = os.environ.get("SLURM_JOB_ID", "not set")
+    config_for_wandb["Slurm_job_file_name"] = os.environ.get("SLURM_JOB_FILE_NAME", "not set")
+    if len(wandb_run_id) > 0:
+        wandb_resume = "must"
+    else:
+        wandb_run_id = None
+        wandb_resume = None
     wandb.init(
         project=wandb_project,
         name=wandb_run_name,
         config=config_for_wandb,
         save_code=True,
         settings=wandb.Settings(code_dir="."),
-        id=wandb_run_id if len(wandb_run_id)>0 else None,
-        resume="must"
+        id=wandb_run_id,
+        resume=wandb_resume
     )
 
 # training loop
