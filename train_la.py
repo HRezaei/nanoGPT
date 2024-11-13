@@ -284,6 +284,7 @@ if wandb_log and master_process:
     config_for_wandb["Slurm_job_file_content"] = os.environ.get("SLRUM_JOB_FILE_CONTENT", "not set")
     config_for_wandb["Slurm_job_id"] = os.environ.get("SLURM_JOB_ID", "not set")
     config_for_wandb["Slurm_job_file_name"] = os.environ.get("SLURM_JOB_FILE_NAME", "not set")
+    config_for_wandb["model_params"] = model.get_num_params()
     if len(wandb_run_id) > 0:
         wandb_resume = "must"
     else:
