@@ -7,7 +7,10 @@ import sys
 from contextlib import nullcontext
 import torch
 import tiktoken
+from transformers import AutoModelForCausalLM
+
 from model import GPTConfig, GPT, GPTLA, GPT_LAE, GPT_LAA
+from nanollama_model import NanoLlamaMultiToken
 
 # -----------------------------------------------------------------------------
 init_from = 'resume' # either 'resume' (from an out_dir) or a gpt2 variant (e.g. 'gpt2-xl')
@@ -55,8 +58,9 @@ if init_from == 'resume':
     model.load_state_dict(state_dict)
 elif init_from.startswith('gpt2'):
     # init from a given GPT-2 model
-    model = GPT.from_pretrained(init_from, dict(dropout=0.0))
-
+    model = model_class.from_pretrained(init_from, dict(dropout=0.0))
+else:
+    model = AutoModelForCausalLM.from_pretrained(init_from, trust_remote_code=True)
 model.eval()
 model.to(device)
 if compile:

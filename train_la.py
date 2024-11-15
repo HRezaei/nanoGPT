@@ -30,6 +30,7 @@ from torch.distributed import init_process_group, destroy_process_group
 from transformers import AutoConfig, AutoModel, AutoModelForCausalLM
 
 from model import GPT, GPTLA, GPT_LAE, GPT_LAA, GPTConfig
+from nanollama_model import NanoLlamaMultiToken
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
@@ -81,6 +82,8 @@ model_config_class_name = 'GPTConfig'
 look_ahead_size = 1
 look_ahead_basis = 'last_token' # The other option is "past_tokens"
 cross_entropy_loss_reduction = 'mean'
+# The other option is 'one_go' =loss of all heads will be computed in one go and one backward
+llama_loss_mode = 'original'
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
@@ -92,7 +95,8 @@ model_config_class = getattr(sys.modules[__name__], model_config_class_name)
 class_hf_names = {
     "GPTLA": "nanoGPTLookAhead",
     "GPT_LAE": "nanoGPTLookAheadE",
-    "GPT_LAA": "nanoGPTLookAheadA"
+    "GPT_LAA": "nanoGPTLookAheadA",
+    "NanoLlamaMultiToken": "nanoLlamaMultiToken"
 }
 
 # various inits, derived attributes, I/O setup
@@ -140,7 +144,7 @@ def get_batch(split):
 
     ix = torch.randint(len(data) - block_size - look_ahead_size, (batch_size,))
     x = torch.stack([torch.from_numpy((data[i:i + block_size]).astype(np.int64)) for i in ix])
-    if model_class_name == "GPTLA":
+    if model_class in [GPTLA, NanoLlamaMultiToken]:
         ys = []
         for look_ahead in range(0, look_ahead_size + 1):
             # look_ahead=0 means the immediate next token as usual in original nanoGPT
@@ -172,9 +176,10 @@ if os.path.exists(meta_path):
     print(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
 
 # model init
+# start with model_args from command line
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
                   bias=bias, vocab_size=None, dropout=dropout, look_ahead_size=look_ahead_size,
-                  cross_entropy_loss_reduction=cross_entropy_loss_reduction)  # start with model_args from command line
+                  cross_entropy_loss_reduction=cross_entropy_loss_reduction, llama_loss_mode=llama_loss_mode)
 if init_from == 'scratch':
     # init a new model from scratch
     print("Initializing a new model from scratch")
@@ -255,7 +260,8 @@ def estimate_loss():
                 outcome = model(X, Y)
                 loss = outcome.loss
             losses[k] = loss.item()
-            individual_losses[k] = outcome.individual_losses
+            if outcome.individual_losses is not None:
+                individual_losses[k] = outcome.individual_losses
         out[split] = losses.mean()
         out[split + "_individual_losses"] = individual_losses.mean(dim=0)
     model.train()
@@ -361,11 +367,20 @@ while True:
         with ctx:
             microstep_output = model(X, Y)
             logits, loss = microstep_output.logits, microstep_output.loss
-            loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
+            if isinstance(model, NanoLlamaMultiToken):
+                loss = [l / gradient_accumulation_steps for l in loss] # scale the loss to account for gradient accumulation
+            else:
+                loss = loss / gradient_accumulation_steps  # scale the loss to account for gradient accumulation
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         X, Y = get_batch('train')
         # backward pass, with gradient scaling if training in fp16
-        scaler.scale(loss).backward()
+        if not isinstance(loss, list):
+            scaler.scale(loss).backward()
+        if isinstance(loss, list):
+            for loss_item in loss:
+                scaler.scale(loss_item).backward(retain_graph=True)
+            loss = torch.stack(loss).mean()
+
     # clip the gradient
     if grad_clip != 0.0:
         scaler.unscale_(optimizer)

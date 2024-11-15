@@ -135,6 +135,7 @@ class GPTConfig(PretrainedConfig):
     bias: bool = True  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     look_ahead_size: int = 1
     look_ahead_basis: str = "last_token"  # The other option is "past_tokens"
+    llama_loss_mode: str = "original"  # The other option is "one_go"
     model_type: str = "nanogpt"
     attribute_map: Dict[str, Any] = field(default_factory=lambda: {"num_hidden_layers": "n_layer"})
     auto_map: Dict[str, Any] = field(default_factory=lambda: {
@@ -407,7 +408,9 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
             # if the sequence context is growing too long we must crop it at block_size
             idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
             # forward the model to get the logits for the index in the sequence
-            outcome, individual_losses = self(idx_cond)
+            outcome = self(idx_cond)
+            if isinstance(outcome, tuple):
+                outcome = outcome[0]
             logits = outcome.logits
             # pluck the logits at the final step and scale by desired temperature
             logits = logits[:, -1, :] / temperature
