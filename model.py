@@ -604,6 +604,30 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
 
         return idx
 
+    def generate_by_reviser(self, idx, max_new_tokens, reviser, temperature=1.0, top_k=None, **kwargs):
+        """
+        Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
+        the sequence max_new_tokens times, feeding the predictions back into the model each time.
+        Most likely you'll want to make sure to be in model.eval() mode of operation for this.
+        """
+        length_so_far = 0
+        while length_so_far < max_new_tokens:
+            # if the sequence context is growing too long we must crop it at block_size
+            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+            # forward the model to get the logits for the index in the sequence
+            outcome = self(idx_cond)
+            # pluck the logits at the final step and scale by desired temperature
+            idx_next = self.sample_probability(outcome.logits, temperature, top_k)
+            next_tokens = [idx_next]
+            for i in range(self.config.lookahead_size):
+                next_token_prob = reviser(x=idx_next, px=outcome.lookahead_logits[:, i])
+                idx_next = self.sample_probability(next_token_prob, temperature, top_k)
+                next_tokens.append(idx_next)
+            # append sampled index to the running sequence and continue
+            idx_next = torch.tensor(idx_next)
+            idx = torch.cat((idx, idx_next), dim=1)
+
+        return idx
 
 class GPT_LAE(GPT, PyTorchModelHubMixin, PreTrainedModel):
     config_class = GPTConfig
