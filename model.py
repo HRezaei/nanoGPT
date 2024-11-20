@@ -629,6 +629,7 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
 
         return idx
 
+
 class GPT_LAE(GPT, PyTorchModelHubMixin, PreTrainedModel):
     config_class = GPTConfig
 

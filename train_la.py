@@ -41,7 +41,7 @@ log_interval = 1
 eval_iters = 200
 eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
-init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
+init_from = 'scratch'  # 'scratch' or 'resume' or 'gpt2*'
 # wandb logging
 wandb_log = False # disabled by default
 wandb_project = 'owt'
@@ -59,12 +59,12 @@ n_embd = 768
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 # adamw optimizer
-learning_rate = 6e-4 # max learning rate
-max_iters = 600000 # total number of training iterations
+learning_rate = 6e-4  # max learning rate
+max_iters = 600000  # total number of training iterations
 weight_decay = 1e-1
 beta1 = 0.9
 beta2 = 0.95
-grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
+grad_clip = 1.0  # clip gradients at this value, or disable if == 0.0
 # learning rate decay settings
 decay_lr = True # whether to decay the learning rate
 warmup_iters = 2000 # how many steps to warm up for
@@ -80,7 +80,7 @@ compile = True # use PyTorch 2.0 to compile the model to be faster
 model_class_name = 'GPT'
 model_config_class_name = 'GPTConfig'
 look_ahead_size = 1
-look_ahead_basis = 'last_token' # The other option is "past_tokens"
+look_ahead_basis = 'last_token'  # The other option is "past_tokens"
 cross_entropy_loss_reduction = 'mean'
 # The other option is 'one_go' =loss of all heads will be computed in one go and one backward
 llama_loss_mode = 'original'
