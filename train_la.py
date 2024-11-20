@@ -84,6 +84,7 @@ look_ahead_basis = 'last_token'  # The other option is "past_tokens"
 cross_entropy_loss_reduction = 'mean'
 # The other option is 'one_go' =loss of all heads will be computed in one go and one backward
 llama_loss_mode = 'original'
+separate_loss_backwards = False
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
@@ -368,13 +369,20 @@ while True:
         with ctx:
             microstep_output = model(X, Y)
             logits, loss = microstep_output.logits, microstep_output.loss
-            if isinstance(loss, list):
-                loss = [l / gradient_accumulation_steps for l in loss] # scale the loss to account for gradient accumulation
-            else:
-                loss = loss / gradient_accumulation_steps  # scale the loss to account for gradient accumulation
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         X, Y = get_batch('train')
         # backward pass, with gradient scaling if training in fp16
+        if separate_loss_backwards:
+            for ind_loss in microstep_output.individual_losses[2:]:
+                ind_loss = ind_loss / gradient_accumulation_steps
+                scaler.scale(ind_loss).backward(retain_graph=True)
+            # Replace the loss with loss of input + next immediate token:
+            loss = microstep_output.individual_losses[:2].mean()
+        # scale the loss to account for gradient accumulation
+        if isinstance(loss, list):
+            loss = [l / gradient_accumulation_steps for l in loss]
+        else:
+            loss = loss / gradient_accumulation_steps
         if not isinstance(loss, list):
             scaler.scale(loss).backward()
         else:
