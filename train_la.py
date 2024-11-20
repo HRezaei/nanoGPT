@@ -225,6 +225,7 @@ if block_size < model.config.block_size:
     model.crop_block_size(block_size)
     model_args['block_size'] = block_size  # so that the checkpoint will have the right value
 model.to(device)
+model_params = model.get_num_params()
 
 # initialize a GradScaler. If enabled=False scaler is a no-op
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
@@ -290,7 +291,7 @@ if wandb_log and master_process:
     config_for_wandb["Slurm_job_file_content"] = os.environ.get("SLRUM_JOB_FILE_CONTENT", "not set")
     config_for_wandb["Slurm_job_id"] = os.environ.get("SLURM_JOB_ID", "not set")
     config_for_wandb["Slurm_job_file_name"] = os.environ.get("SLURM_JOB_FILE_NAME", "not set")
-    config_for_wandb["model_params"] = model.get_num_params()
+    config_for_wandb["model_params"] = model_params
     if len(wandb_run_id) > 0:
         wandb_resume = "must"
     else:
@@ -367,7 +368,7 @@ while True:
         with ctx:
             microstep_output = model(X, Y)
             logits, loss = microstep_output.logits, microstep_output.loss
-            if isinstance(model, NanoLlamaMultiToken):
+            if isinstance(loss, list):
                 loss = [l / gradient_accumulation_steps for l in loss] # scale the loss to account for gradient accumulation
             else:
                 loss = loss / gradient_accumulation_steps  # scale the loss to account for gradient accumulation
@@ -376,7 +377,7 @@ while True:
         # backward pass, with gradient scaling if training in fp16
         if not isinstance(loss, list):
             scaler.scale(loss).backward()
-        if isinstance(loss, list):
+        else:
             for loss_item in loss:
                 scaler.scale(loss_item).backward(retain_graph=True)
             loss = torch.stack(loss).mean()
