@@ -488,7 +488,7 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
             self.to(device_map[''])
 
     def forward(self, input_ids, targets=None, output_hidden_states=False, past_key_values=None, **kwargs):
-        output = super().forward(
+        output, _, _ = super().forward(
             input_ids=input_ids,
             targets=targets,
             output_hidden_states=output_hidden_states,
