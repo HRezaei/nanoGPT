@@ -120,7 +120,7 @@ class NanoLlamaMultiToken(GPT, PyTorchModelHubMixin, PreTrainedModel,
       presents = presents + (present,)
       latents.append(x)
 
-    x = torch.stack(latents, dim=-2)  # (_bsz, seqlen, n_heads_to_use, dim)
+    x = torch.stack(latents, dim=1)  # (_bsz, n_heads_to_use, seqlen, dim)
     x = self.extra_heads.ln_f(x)
 
     individual_losses = []
@@ -130,24 +130,24 @@ class NanoLlamaMultiToken(GPT, PyTorchModelHubMixin, PreTrainedModel,
         head_logits = []
         head_losses = []
         for i in range(head_count):
-          logits = self.lm_head(x[:, :, [i]])
+          logits = self.lm_head(x[:, [i]])
           loss = self.compute_loss(logits, targets[:, i].contiguous())
           head_losses.append(loss)
           head_logits.append(logits)
         loss = head_losses
-        logits = torch.cat(head_logits, dim=2)
+        logits = torch.cat(head_logits, dim=1)
       elif (not self.training) or self.config.llama_loss_mode == 'one_go':
         logits = self.lm_head(x)
         loss = self.compute_loss(logits, targets)
 
       # For this model, we don't differentiate between loss on input tokens and next token
       individual_losses = [
-        self.compute_loss(logits[:, :-1, 0].contiguous(), targets[:, 0, :-1].contiguous())  # Input loss
+        self.compute_loss(logits[:, 0, :-1].contiguous(), targets[:, 0, :-1].contiguous())  # Input loss
       ]
       # So we only will have one loss for original head and one loss per lookahead heads:
       for i in range(self.config.look_ahead_size + 1):
         individual_losses.append(
-          self.compute_loss(logits[:, -1, i].contiguous(), targets[:, i, -1].contiguous())
+          self.compute_loss(logits[:, i, -1].contiguous(), targets[:, i, -1].contiguous())
         )
       #individual_losses['loss'] = loss
       #individual_losses['input'] = self.compute_loss(logits[:, :-1, 0].contiguous(), targets[:, 0, :-1].contiguous()).item()
@@ -158,12 +158,12 @@ class NanoLlamaMultiToken(GPT, PyTorchModelHubMixin, PreTrainedModel,
 
     return CausalLMOutputWithCrossAttentionsAndLookAhead(
       loss=loss,
-      logits=logits[:, :, 0],
+      logits=logits[:, 0],
       past_key_values=past_key_values,
       hidden_states=None,  # For now, I don't need this
       attentions=None,  # For now, I don't need this
       cross_attentions=None,  # For now, I don't need this
-      look_ahead_logits=logits[:, :, 1:],
+      look_ahead_logits=logits[:, 1:],
       individual_losses=torch.stack(individual_losses) if len(individual_losses) > 0 else None
     )
 
