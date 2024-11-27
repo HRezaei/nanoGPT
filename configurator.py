@@ -43,5 +43,7 @@ for arg in sys.argv[1:]:
             # cross fingers
             print(f"Overriding: {key} = {attempt}")
             globals()[key] = attempt
+        elif key in ["local-rank"]:
+            print(f"Skipped var {key}")
         else:
             raise ValueError(f"Unknown config key: {key}")
