@@ -368,7 +368,7 @@ while True:
             model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
         with ctx:
             microstep_output = model(X, Y)
-            logits, loss = microstep_output.logits, microstep_output.loss
+            loss = microstep_output.loss
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         X, Y = get_batch('train')
         # backward pass, with gradient scaling if training in fp16

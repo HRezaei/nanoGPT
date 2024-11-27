@@ -497,11 +497,13 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
         )
 
         # For this model, we don't differentiate between loss on input tokens and next token
-        individual_losses = [torch.tensor(0, device=output.loss.device)]
+        individual_losses = [
+            self.compute_loss(output.logits[:, 0, :-1].contiguous(), targets[:, 0, :-1].contiguous())
+        ]
         # So we only will have one loss for original head and one loss per lookahead heads:
         for i in range(self.config.look_ahead_size+1):
             individual_losses.append(
-                self.compute_loss(output.logits[:, i].contiguous(), targets[:, i].contiguous())
+                self.compute_loss(output.logits[:, i, -1].contiguous(), targets[:, i, -1].contiguous())
             )
 
         return CausalLMOutputWithCrossAttentionsAndLookAhead(
