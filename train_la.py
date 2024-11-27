@@ -147,7 +147,7 @@ def get_batch(split):
     x = torch.stack([torch.from_numpy((data[i:i + block_size]).astype(np.int64)) for i in ix])
     if model_class in [GPTLA, NanoLlamaMultiToken]:
         ys = []
-        for look_ahead in range(0, look_ahead_size + 1):
+        for look_ahead in range(1, look_ahead_size + 2):
             # look_ahead=0 means the immediate next token as usual in original nanoGPT
             y = torch.stack(
                 [torch.from_numpy((data[i + look_ahead:i + look_ahead + block_size]).astype(np.int64)) for i in ix])
