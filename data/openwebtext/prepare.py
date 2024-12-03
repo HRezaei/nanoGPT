@@ -2,10 +2,13 @@
 # https://github.com/HazyResearch/flash-attention/blob/main/training/src/datamodules/language_modeling_hf.py
 
 import os
+import sys
+
 from tqdm import tqdm
 import numpy as np
 import tiktoken
 from datasets import load_dataset # huggingface datasets
+from transformers import AutoTokenizer
 
 # number of workers in .map() call
 # good number to use is ~order number of cpu cores // 2
@@ -16,7 +19,12 @@ num_proc = 8
 # it is better than 1 usually though
 num_proc_load_dataset = num_proc
 
-enc = tiktoken.get_encoding("gpt2")
+if len(sys.argv) > 1:
+    enc = AutoTokenizer.from_pretrained(sys.argv[1])
+    print(f"Loaded tokenizer from {sys.argv[1]}")
+    enc.encode_ordinary = enc.encode
+else:
+    enc = tiktoken.get_encoding("gpt2")
 
 if __name__ == '__main__':
     # takes 54GB in huggingface .cache dir, about 8M documents (8,013,769)
