@@ -262,8 +262,8 @@ def estimate_loss():
                 outcome = model(X, Y)
                 loss = outcome.loss
             losses[k] = loss.item()
-            if outcome.individual_losses is not None:
-                individual_losses[k] = outcome.individual_losses
+            if outcome.get("individual_losses") is not None:
+                individual_losses[k] = outcome.get("individual_losses")
         out[split] = losses.mean()
         out[split + "_individual_losses"] = individual_losses.mean(dim=0)
     model.train()
@@ -373,11 +373,11 @@ while True:
         X, Y = get_batch('train')
         # backward pass, with gradient scaling if training in fp16
         if separate_loss_backwards:
-            for ind_loss in microstep_output.individual_losses[2:]:
+            for ind_loss in microstep_output["individual_losses"][2:]:
                 ind_loss = ind_loss / gradient_accumulation_steps
                 scaler.scale(ind_loss).backward(retain_graph=True)
             # Replace the loss with loss of input + next immediate token:
-            loss = microstep_output.individual_losses[:2].mean()
+            loss = microstep_output["individual_losses"][:2].mean()
         # scale the loss to account for gradient accumulation
         if isinstance(loss, list):
             loss = [l / gradient_accumulation_steps for l in loss]

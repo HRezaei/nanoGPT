@@ -230,8 +230,10 @@ def estimate_loss():
         for k in range(eval_iters):
             iteration_x, iteration_y = get_batch(split)
             with ctx:
-                outcome, micro_losses, elapsed_times = model(iteration_x, targets=iteration_y)
+                outcome = model(iteration_x, targets=iteration_y)
                 iteration_loss = outcome.loss
+                micro_losses = outcome["individual_losses"]
+                elapsed_times = outcome["elapsed_times"]
             losses[k] = iteration_loss.item()
             for key, value in micro_losses.items():
                 if key not in individual_losses:
@@ -339,7 +341,7 @@ while True:
             # looking at the source of that context manager, it just toggles this variable
             model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
         with ctx:
-            outcome, _, _ = model(X, Y)
+            outcome = model(X, Y)
             loss = outcome.loss
             loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
         # immediately async prefetch next batch while model is doing the forward pass on the GPU

@@ -274,14 +274,17 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
         else:
             loss = None
 
-        return CausalLMOutputWithCrossAttentions(
+        outcome = CausalLMOutputWithCrossAttentions(
             loss=loss,
             logits=logits,
             past_key_values=presents,
             hidden_states=all_hidden_states,  # For now, I don't need this
             attentions=None,  # For now, I don't need this
             cross_attentions=None,  # For now, I don't need this
-        ), individual_losses, elapsed_times
+        )
+        outcome["individual_losses"] = individual_losses
+        outcome["elapsed_times"] = elapsed_times
+        return outcome
 
     def crop_block_size(self, block_size):
         # model surgery to decrease the block size if necessary
@@ -446,7 +449,6 @@ class GPTLookAheadHeads(nn.Module):
 @dataclass
 class CausalLMOutputWithCrossAttentionsAndLookAhead(CausalLMOutputWithCrossAttentions):
     look_ahead_logits: torch.FloatTensor = None
-    individual_losses: torch.FloatTensor = None
 
 
 class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
@@ -488,7 +490,7 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
             self.to(device_map[''])
 
     def forward(self, input_ids, targets=None, output_hidden_states=False, past_key_values=None, **kwargs):
-        output, _, _ = super().forward(
+        output = super().forward(
             input_ids=input_ids,
             targets=targets,
             output_hidden_states=output_hidden_states,
@@ -507,7 +509,7 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
                     self.compute_loss(output.logits[:, i, -1].contiguous(), targets[:, i, -1].contiguous())
                 )
 
-        return CausalLMOutputWithCrossAttentionsAndLookAhead(
+        outcome = CausalLMOutputWithCrossAttentionsAndLookAhead(
             loss=output.loss,
             logits=output.logits[:, 0],
             past_key_values=output.past_key_values,
@@ -515,8 +517,9 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
             attentions=None,  # For now, I don't need this
             cross_attentions=None,  # For now, I don't need this
             look_ahead_logits=output.logits[:, 1:],
-            individual_losses=torch.stack(individual_losses) if individual_losses else None
         )
+        outcome["individual_losses"] = torch.stack(individual_losses) if individual_losses else None
+        return outcome
 
     @torch.no_grad()
     def generate(self, input_ids, max_new_tokens, temperature=1.0, top_k=None):
@@ -709,7 +712,7 @@ class GPT_LAE(GPT, PyTorchModelHubMixin, PreTrainedModel):
             logits = self.lm_head(x[:, -(1+self.config.look_ahead_size):, :])
             loss = None
 
-        return CausalLMOutputWithCrossAttentionsAndLookAhead(
+        outcome = CausalLMOutputWithCrossAttentionsAndLookAhead(
             loss=loss,
             logits=logits[:, :-self.config.look_ahead_size],
             past_key_values=presents,
@@ -717,8 +720,10 @@ class GPT_LAE(GPT, PyTorchModelHubMixin, PreTrainedModel):
             attentions=None,  # For now, I don't need this
             cross_attentions=None,  # For now, I don't need this
             look_ahead_logits=logits[:, -self.config.look_ahead_size:, :],
-            individual_losses=torch.stack(individual_losses)
         )
+        outcome["individual_losses"] = torch.stack(individual_losses)
+        return outcome
+
     @torch.no_grad()
     def generate(self, input_ids, max_new_tokens, temperature=1.0, top_k=None):
         """
@@ -838,7 +843,7 @@ class GPT_LAA(GPT, PyTorchModelHubMixin, PreTrainedModel):
             logits = self.lm_head(x[:, [-1], :])  # note: using list [-1] to preserve the time dim
             loss = None
 
-        return CausalLMOutputWithCrossAttentionsAndLookAhead(
+        outcome = CausalLMOutputWithCrossAttentionsAndLookAhead(
             loss=loss,
             logits=logits,
             past_key_values=presents,
@@ -846,8 +851,9 @@ class GPT_LAA(GPT, PyTorchModelHubMixin, PreTrainedModel):
             attentions=None,  # For now, I don't need this
             cross_attentions=None,  # For now, I don't need this
             look_ahead_logits=look_ahead_logits,
-            individual_losses=torch.stack(individual_losses)
         )
+        outcome["individual_losses"] = torch.stack(individual_losses)
+        return outcome
 
     @torch.no_grad()
     def generate(self, input_ids, max_new_tokens, temperature=1.0, top_k=None):

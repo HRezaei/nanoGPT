@@ -156,7 +156,7 @@ class NanoLlamaMultiToken(GPT, PyTorchModelHubMixin, PreTrainedModel,
       logits = self.lm_head(x)
       loss = None
 
-    return CausalLMOutputWithCrossAttentionsAndLookAhead(
+    output = CausalLMOutputWithCrossAttentionsAndLookAhead(
       loss=loss,
       logits=logits[:, 0],
       past_key_values=past_key_values,
@@ -164,8 +164,9 @@ class NanoLlamaMultiToken(GPT, PyTorchModelHubMixin, PreTrainedModel,
       attentions=None,  # For now, I don't need this
       cross_attentions=None,  # For now, I don't need this
       look_ahead_logits=logits[:, 1:],
-      individual_losses=torch.stack(individual_losses) if len(individual_losses) > 0 else None
     )
+    output["individual_losses"] = torch.stack(individual_losses) if len(individual_losses) > 0 else None
+    return output
 
   @torch.inference_mode()
   def generate_based_on_llama_source(
