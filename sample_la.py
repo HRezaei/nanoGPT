@@ -107,7 +107,7 @@ with torch.no_grad():
     with ctx:
         generate_method = getattr(model, generate_method_name)
         method_args = {
-            "idx": x,
+            "input_ids": x,
             "max_new_tokens": max_new_tokens,
             "temperature": temperature,
             "top_k": top_k,

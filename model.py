@@ -398,7 +398,7 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
         return mfu
 
     @torch.no_grad()
-    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
+    def generate(self, input_ids, max_new_tokens, temperature=1.0, top_k=None, **kwargs):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
         the sequence max_new_tokens times, feeding the predictions back into the model each time.
@@ -406,7 +406,7 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
         """
         for _ in range(max_new_tokens):
             # if the sequence context is growing too long we must crop it at block_size
-            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+            idx_cond = input_ids if input_ids.size(1) <= self.config.block_size else input_ids[:, -self.config.block_size:]
             # forward the model to get the logits for the index in the sequence
             outcome = self(idx_cond)
             if isinstance(outcome, tuple):
@@ -423,9 +423,9 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
             # sample from the distribution
             idx_next = torch.multinomial(probs, num_samples=1)
             # append sampled index to the running sequence and continue
-            idx = torch.cat((idx, idx_next), dim=1)
+            input_ids = torch.cat((input_ids, idx_next), dim=1)
 
-        return idx
+        return input_ids
 
 
 class GPTLookAheadHeads(nn.Module):
@@ -519,7 +519,7 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
         )
 
     @torch.no_grad()
-    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
+    def generate(self, input_ids, max_new_tokens, temperature=1.0, top_k=None):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
         the sequence max_new_tokens times, feeding the predictions back into the model each time.
@@ -527,7 +527,7 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
         """
         for _ in range(max_new_tokens // self.config.look_ahead_size):
             # if the sequence context is growing too long we must crop it at block_size
-            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+            idx_cond = input_ids if input_ids.size(1) <= self.config.block_size else input_ids[:, -self.config.block_size:]
             # forward the model to get the logits for the index in the sequence
             output = self(idx_cond)
             logits = torch.cat([output.logits.unsqueeze(1), output.look_ahead_logits], dim=1)
@@ -544,9 +544,9 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
             for i in range(probs.size(0)):
                 idx_next = torch.multinomial(probs[i, None], num_samples=100)
                 # append sampled index to the running sequence and continue
-                idx = torch.cat((idx, idx_next), dim=1)
+                input_ids = torch.cat((input_ids, idx_next), dim=1)
 
-        return idx
+        return input_ids
 
     @torch.no_grad()
     def generate_lookahead(self, idx, max_new_tokens, temperature=1.0, top_k=None):
@@ -720,7 +720,7 @@ class GPT_LAE(GPT, PyTorchModelHubMixin, PreTrainedModel):
             individual_losses=torch.stack(individual_losses)
         )
     @torch.no_grad()
-    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
+    def generate(self, input_ids, max_new_tokens, temperature=1.0, top_k=None):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
         the sequence max_new_tokens times, feeding the predictions back into the model each time.
@@ -728,7 +728,7 @@ class GPT_LAE(GPT, PyTorchModelHubMixin, PreTrainedModel):
         """
         for _ in range(max_new_tokens // self.config.look_ahead_size):
             # if the sequence context is growing too long we must crop it at block_size
-            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+            idx_cond = input_ids if input_ids.size(1) <= self.config.block_size else input_ids[:, -self.config.block_size:]
             # forward the model to get the logits for the index in the sequence
             output = self(idx_cond)
             logits = torch.cat([output.logits, output.look_ahead_logits], dim=1)
@@ -745,9 +745,9 @@ class GPT_LAE(GPT, PyTorchModelHubMixin, PreTrainedModel):
             idx_next = torch.multinomial(probs, num_samples=1)
             idx_next = idx_next.transpose(0, 1)
             # append sampled index to the running sequence and continue
-            idx = torch.cat((idx, idx_next), dim=1)
+            input_ids = torch.cat((input_ids, idx_next), dim=1)
 
-        return idx
+        return input_ids
 
 
 class GPT_LAA(GPT, PyTorchModelHubMixin, PreTrainedModel):
@@ -850,7 +850,7 @@ class GPT_LAA(GPT, PyTorchModelHubMixin, PreTrainedModel):
         )
 
     @torch.no_grad()
-    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
+    def generate(self, input_ids, max_new_tokens, temperature=1.0, top_k=None):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
         the sequence max_new_tokens times, feeding the predictions back into the model each time.
@@ -858,7 +858,7 @@ class GPT_LAA(GPT, PyTorchModelHubMixin, PreTrainedModel):
         """
         for _ in range(max_new_tokens // self.config.look_ahead_size):
             # if the sequence context is growing too long we must crop it at block_size
-            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+            idx_cond = input_ids if input_ids.size(1) <= self.config.block_size else input_ids[:, -self.config.block_size:]
             # forward the model to get the logits for the index in the sequence
             outputs = self(idx_cond)
             logits = torch.cat([outputs.logits, outputs.look_ahead_logits], dim=1)
@@ -875,6 +875,10 @@ class GPT_LAA(GPT, PyTorchModelHubMixin, PreTrainedModel):
             idx_next = torch.multinomial(probs, num_samples=1)
             idx_next = idx_next.transpose(0, 1)
             # append sampled index to the running sequence and continue
+            input_ids = torch.cat((input_ids, idx_next), dim=1)
+
+        return input_ids
+
             idx = torch.cat((idx, idx_next), dim=1)
 
         return idx
