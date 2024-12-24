@@ -9,10 +9,9 @@ from contextlib import nullcontext
 import torch
 from model import GPTConfig, GPT, GPTLA, GPT_LAE, GPT_LAA
 
-from transformers import GPT2TokenizerFast
+from transformers import GPT2TokenizerFast, LlamaTokenizer
 
 # -----------------------------------------------------------------------------
-init_from = 'resume' # either 'resume' (from an out_dir) or a gpt2 variant (e.g. 'gpt2-xl')
 out_dir = 'out' # ignored if init_from is not 'resume'
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1', etc.
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32' or 'bfloat16' or 'float16'
@@ -20,10 +19,13 @@ compile = False # use PyTorch 2.0 to compile the model to be faster
 
 model_class_name = 'GPTLA'
 look_ahead_size = 2
-
+wandb_run_path = ''
+repo_id = ''
 exec(open('configurator.py').read()) # overrides from command line or config file
 # -----------------------------------------------------------------------------
 
+if not repo_id:
+    raise Exception("repo_id is required.")
 
 model_class = getattr(sys.modules[__name__], model_class_name)
 
@@ -51,12 +53,14 @@ model.to(device)
 if compile:
     model = torch.compile(model) # requires PyTorch 2.0 (optional)
 
-repo_id = "UniYork/nanoGPT2LookAheadE"
+
+commit_message = f"WandB run: {wandb_run_path}" if wandb_run_path else None
 print("pushing")
-model.push_to_hub(repo_id, private=True)
+model.push_to_hub(repo_id, private=True, commit_message=commit_message)
 print("pushed")
 
 
-tokenizer = GPT2TokenizerFast.from_pretrained('gpt2')
+#tokenizer = GPT2TokenizerFast.from_pretrained('gpt2')
+tokenizer = LlamaTokenizer.from_pretrained("llama/tokenizer.model")
 tokenizer.model_max_length = 512
 tokenizer.push_to_hub(repo_id, private=True)
