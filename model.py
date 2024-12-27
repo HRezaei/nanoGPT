@@ -401,13 +401,13 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
         return mfu
 
     @torch.no_grad()
-    def generate(self, input_ids, max_new_tokens, temperature=1.0, top_k=None, **kwargs):
+    def generate(self, input_ids, max_length, temperature=1.0, top_k=None, **kwargs):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
-        the sequence max_new_tokens times, feeding the predictions back into the model each time.
+        the sequence max_length times, feeding the predictions back into the model each time.
         Most likely you'll want to make sure to be in model.eval() mode of operation for this.
         """
-        for _ in range(max_new_tokens):
+        for _ in range(max_length):
             # if the sequence context is growing too long we must crop it at block_size
             idx_cond = input_ids if input_ids.size(1) <= self.config.block_size else input_ids[:, -self.config.block_size:]
             # forward the model to get the logits for the index in the sequence
@@ -522,13 +522,13 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
         return outcome
 
     @torch.no_grad()
-    def generate(self, input_ids, max_new_tokens, temperature=1.0, top_k=None):
+    def generate_lookahead(self, input_ids, max_length, temperature=1.0, top_k=None, **kwargs):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
-        the sequence max_new_tokens times, feeding the predictions back into the model each time.
+        the sequence max_length times, feeding the predictions back into the model each time.
         Most likely you'll want to make sure to be in model.eval() mode of operation for this.
         """
-        for _ in range(max_new_tokens // self.config.look_ahead_size):
+        for _ in range(max_length // self.config.look_ahead_size):
             # if the sequence context is growing too long we must crop it at block_size
             idx_cond = input_ids if input_ids.size(1) <= self.config.block_size else input_ids[:, -self.config.block_size:]
             # forward the model to get the logits for the index in the sequence
@@ -552,14 +552,14 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
         return input_ids
 
     @torch.no_grad()
-    def generate_lookahead(self, idx, max_new_tokens, temperature=1.0, top_k=None):
+    def generate_like_speculative(self, idx, max_length, temperature=1.0, top_k=None):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
-        the sequence max_new_tokens times, feeding the predictions back into the model each time.
+        the sequence max_length times, feeding the predictions back into the model each time.
         Most likely you'll want to make sure to be in model.eval() mode of operation for this.
         """
         past_key_values = None
-        for _ in range(max_new_tokens // (self.config.look_ahead_size + 1)):
+        for _ in range(max_length // (self.config.look_ahead_size + 1)):
             # if the sequence context is growing too long we must crop it at block_size
             idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
             # forward the model to get the logits for the index in the sequence
@@ -610,14 +610,14 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
 
         return idx
 
-    def generate_by_reviser(self, idx, max_new_tokens, reviser, temperature=1.0, top_k=None, **kwargs):
+    def generate_by_reviser(self, idx, max_length, reviser, temperature=1.0, top_k=None, **kwargs):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
-        the sequence max_new_tokens times, feeding the predictions back into the model each time.
+        the sequence max_length times, feeding the predictions back into the model each time.
         Most likely you'll want to make sure to be in model.eval() mode of operation for this.
         """
         length_so_far = 0
-        while length_so_far < max_new_tokens:
+        while length_so_far < max_length:
             # if the sequence context is growing too long we must crop it at block_size
             idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
             # forward the model to get the logits for the index in the sequence
@@ -725,13 +725,13 @@ class GPT_LAE(GPT, PyTorchModelHubMixin, PreTrainedModel):
         return outcome
 
     @torch.no_grad()
-    def generate(self, input_ids, max_new_tokens, temperature=1.0, top_k=None):
+    def generate_lookahead(self, input_ids, max_length, temperature=1.0, top_k=None):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
-        the sequence max_new_tokens times, feeding the predictions back into the model each time.
+        the sequence max_length times, feeding the predictions back into the model each time.
         Most likely you'll want to make sure to be in model.eval() mode of operation for this.
         """
-        for _ in range(max_new_tokens // self.config.look_ahead_size):
+        for _ in range(max_length // self.config.look_ahead_size):
             # if the sequence context is growing too long we must crop it at block_size
             idx_cond = input_ids if input_ids.size(1) <= self.config.block_size else input_ids[:, -self.config.block_size:]
             # forward the model to get the logits for the index in the sequence
@@ -856,13 +856,13 @@ class GPT_LAA(GPT, PyTorchModelHubMixin, PreTrainedModel):
         return outcome
 
     @torch.no_grad()
-    def generate(self, input_ids, max_new_tokens, temperature=1.0, top_k=None):
+    def generate_lookahead(self, input_ids, max_length=50, temperature=1.0, top_k=None):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
-        the sequence max_new_tokens times, feeding the predictions back into the model each time.
+        the sequence max_length times, feeding the predictions back into the model each time.
         Most likely you'll want to make sure to be in model.eval() mode of operation for this.
         """
-        for _ in range(max_new_tokens // self.config.look_ahead_size):
+        for _ in range(max_length // self.config.look_ahead_size):
             # if the sequence context is growing too long we must crop it at block_size
             idx_cond = input_ids if input_ids.size(1) <= self.config.block_size else input_ids[:, -self.config.block_size:]
             # forward the model to get the logits for the index in the sequence
@@ -885,6 +885,109 @@ class GPT_LAA(GPT, PyTorchModelHubMixin, PreTrainedModel):
 
         return input_ids
 
-            idx = torch.cat((idx, idx_next), dim=1)
+    @torch.no_grad()
+    def generate_like_speculative(self, idx, max_length, temperature=1.0, top_k=None, tokenizer=None):
+        """
+        Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
+        the sequence max_length times, feeding the predictions back into the model each time.
+        Most likely you'll want to make sure to be in model.eval() mode of operation for this.
+        """
+        past_key_values = None
+        for _ in range(max_length // (self.config.look_ahead_size + 1)):
+            # if the sequence context is growing too long we must crop it at block_size
+            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+            # forward the model to get the logits for the index in the sequence
+            output = self(idx_cond)
+            logits = torch.cat([output.logits[:, [-1], :], output.look_ahead_logits], dim=1)
+            # pluck the logits at the final step and scale by desired temperature
+            logits = logits / temperature
+            # optionally crop the logits to only the top k options
+            if top_k is not None:
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                logits[logits < v[:, :, [-1]]] = -float('Inf')
+            # apply softmax to convert logits to (normalized) probabilities
+            probs = F.softmax(logits, dim=-1).squeeze(0)
+            samples = torch.multinomial(probs, num_samples=3)
+            # sample from the distribution
+            # for i in range(1, samples.size(0)):
+            products = torch.cartesian_prod(*samples)
+            prompt_plus_candidates = torch.cat([
+                torch.expand_copy(idx_cond, (products.shape[0], idx_cond.shape[1])),
+                products
+            ], dim=1)
+            verification_outcome = self.forward(prompt_plus_candidates, past_key_values=past_key_values)
+            verification_logits = verification_outcome.logits[:, -probs.shape[0] - 1:-1, :]
+
+            # Discard logits for the next token and for the prompt tokens except the last token of prompt:
+            verified_candidates = []
+            verifier_candidates = torch.argmax(verification_logits, dim=2)
+            for candidate_index, candidate in enumerate(products):
+                if verifier_candidates[candidate_index].allclose(candidate):
+                    verified_candidates.append(candidate)
+
+            if len(verified_candidates) > 0:
+                idx_next = verified_candidates[0].unsqueeze(0)
+                past_key_values = verification_outcome.past_key_values
+                # append sampled index to the running sequence and continue
+                idx = torch.cat((idx, idx_next), dim=1)
+            else:
+                print("No valid candidate found.")
+
+        return idx
+
+    @torch.no_grad()
+    def generate_lookahead_using_only_last_token(self, idx, max_new_tokens, temperature=1.0, top_k=None, tokenizer=None):
+        """
+        Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
+        the sequence max_new_tokens times, feeding the predictions back into the model each time.
+        Most likely you'll want to make sure to be in model.eval() mode of operation for this.
+        """
+        past_key_values = None
+        for _ in range(max_new_tokens // (self.config.look_ahead_size + 1)):
+            # if the sequence context is growing too long we must crop it at block_size
+            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+            # forward the model to get the logits for the index in the sequence
+            output = self(idx_cond)
+            logits = torch.cat([output.logits[:, [-1], :], output.look_ahead_logits], dim=1)
+            # pluck the logits at the final step and scale by desired temperature
+            logits = logits / temperature
+            # optionally crop the logits to only the top k options
+            if top_k is not None:
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                logits[logits < v[:, :, [-1]]] = -float('Inf')
+            # apply softmax to convert logits to (normalized) probabilities
+            probs = F.softmax(logits, dim=-1).squeeze(0)
+            samples = torch.multinomial(probs, num_samples=3)
+            num_tokens = probs.size(0)
+            # sample from the distribution
+            # for i in range(1, samples.size(0)):
+            products = torch.cartesian_prod(*samples)
+            prompt_plus_candidates = []
+            for index, candidate in enumerate(products):
+                prompt_plus_candidates.extend([
+                    torch.cat([idx_cond, candidate[:i]]) for i in range(candidate.shape[0])
+                ])
+            prompt_plus_candidates = torch.tensor(prompt_plus_candidates)
+            verification_outcome = self.forward(prompt_plus_candidates)
+            verification_logits = verification_outcome.logits[:, -1, :]
+
+            # Discard logits for the next token and for the prompt tokens except the last token of prompt:
+            verified_candidates = []
+            for candidate_index, candidate in enumerate(products):
+                for token_index, token in enumerate(candidate):
+                    index_in_logits = candidate_index * num_tokens + token_index
+                    top_verified_tokens = torch.topk(verification_logits[index_in_logits], top_k).indices
+                    if token not in top_verified_tokens:
+                        break
+                else:
+                    verified_candidates.append(candidate)
+
+            if len(verified_candidates) > 0:
+                idx_next = verified_candidates[0].unsqueeze(0)
+                past_key_values = verification_outcome.past_key_values
+                # append sampled index to the running sequence and continue
+                idx = torch.cat((idx, idx_next), dim=1)
+            else:
+                print("No valid candidate found.")
 
         return idx
