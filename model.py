@@ -731,7 +731,7 @@ class GPT_LAE(GPT, PyTorchModelHubMixin, PreTrainedModel):
             cross_attentions=None,  # For now, I don't need this
             look_ahead_logits=logits[:, -self.config.look_ahead_size:, :],
         )
-        outcome["individual_losses"] = torch.stack(individual_losses)
+        outcome["individual_losses"] = torch.stack(individual_losses) if individual_losses else None
         return outcome
 
     @torch.no_grad()
@@ -865,7 +865,7 @@ class GPT_LAA(GPT, PyTorchModelHubMixin, PreTrainedModel):
             cross_attentions=None,  # For now, I don't need this
             look_ahead_logits=look_ahead_logits,
         )
-        outcome["individual_losses"] = torch.stack(individual_losses)
+        outcome["individual_losses"] = torch.stack(individual_losses) if individual_losses else None
         return outcome
 
     @torch.no_grad()
