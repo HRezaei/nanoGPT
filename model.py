@@ -10,6 +10,7 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 import math
 import inspect
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Dict, Any
 
@@ -197,8 +198,11 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
             if pn.endswith('c_proj.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
 
-        if device_map is not None and '' in device_map:
+        if isinstance(device_map, OrderedDict) and '' in device_map:
             self.to(device_map[''])
+        else:
+            print(f"Putting the model to {device_map}")
+            self.to(device_map if device_map != "auto" else "cuda")
 
     def get_num_params(self, exclude_embeddings=True):
         """
@@ -486,8 +490,11 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
             if pn.endswith('c_proj.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
 
-        if device_map is not None and '' in device_map:
+        if isinstance(device_map, OrderedDict) and '' in device_map:
             self.to(device_map[''])
+        else:
+            print(f"Putting the model to {device_map}")
+            self.to(device_map if device_map != "auto" else "cuda")
 
     def forward(self, input_ids, targets=None, output_hidden_states=False, past_key_values=None, **kwargs):
         output = super().forward(
@@ -664,8 +671,11 @@ class GPT_LAE(GPT, PyTorchModelHubMixin, PreTrainedModel):
             if pn.endswith('c_proj.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer))
 
-        if device_map is not None and '' in device_map:
+        if isinstance(device_map, OrderedDict) and '' in device_map:
             self.to(device_map[''])
+        else:
+            print(f"Putting the model to {device_map}")
+            self.to(device_map if device_map != "auto" else "cuda")
 
     def forward(self, input_ids, targets=None, output_hidden_states=False, past_key_values=None, **kwargs):
         if past_key_values is None:
@@ -787,8 +797,11 @@ class GPT_LAA(GPT, PyTorchModelHubMixin, PreTrainedModel):
             if pn.endswith('c_proj.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer))
 
-        if device_map is not None and '' in device_map:
+        if isinstance(device_map, OrderedDict) and '' in device_map:
             self.to(device_map[''])
+        else:
+            print(f"Putting the model to {device_map}")
+            self.to(device_map if device_map != "auto" else "cuda")
 
     def forward(self, input_ids, targets=None, output_hidden_states=False, past_key_values=None, **kwargs):
         if past_key_values is None:
