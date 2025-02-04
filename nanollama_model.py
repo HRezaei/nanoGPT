@@ -160,7 +160,7 @@ class NanoLlamaMultiToken(GPT, PyTorchModelHubMixin, PreTrainedModel,
       loss=loss,
       logits=logits[:, 0],
       past_key_values=past_key_values,
-      hidden_states=None,  # For now, I don't need this
+      hidden_states=all_hidden_states,  # For now, I don't need this
       attentions=None,  # For now, I don't need this
       cross_attentions=None,  # For now, I don't need this
       look_ahead_logits=logits[:, 1:],
