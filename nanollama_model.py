@@ -1,4 +1,5 @@
 import math
+from collections import OrderedDict
 from typing import List, Optional, Tuple
 
 import torch
@@ -82,8 +83,12 @@ class NanoLlamaMultiToken(GPT, PyTorchModelHubMixin, PreTrainedModel,
       if pn.endswith('c_proj.weight'):
         torch.nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer))
 
-    if device_map is not None and '' in device_map:
+    if isinstance(device_map, OrderedDict) and '' in device_map:
+      print(f"Putting the model to device {device_map['']}")
       self.to(device_map[''])
+    elif device_map is not None:
+      print(f"Putting the model to {device_map}")
+      self.to(device_map if device_map != "auto" else "cuda")
 
   def forward(self, input_ids, targets=None, output_hidden_states=False, past_key_values=None, start_pos=0, **kwargs):
     if past_key_values is None:
