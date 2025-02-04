@@ -199,8 +199,9 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
 
         if isinstance(device_map, OrderedDict) and '' in device_map:
+            print(f"Putting the model to device {device_map['']}")
             self.to(device_map[''])
-        else:
+        elif device_map is not None:
             print(f"Putting the model to {device_map}")
             self.to(device_map if device_map != "auto" else "cuda")
 
@@ -491,8 +492,9 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
 
         if isinstance(device_map, OrderedDict) and '' in device_map:
+            print(f"Putting the model to device {device_map['']}")
             self.to(device_map[''])
-        else:
+        elif device_map is not None:
             print(f"Putting the model to {device_map}")
             self.to(device_map if device_map != "auto" else "cuda")
 
@@ -672,8 +674,9 @@ class GPT_LAE(GPT, PyTorchModelHubMixin, PreTrainedModel):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer))
 
         if isinstance(device_map, OrderedDict) and '' in device_map:
+            print(f"Putting the model to device {device_map['']}")
             self.to(device_map[''])
-        else:
+        elif device_map is not None:
             print(f"Putting the model to {device_map}")
             self.to(device_map if device_map != "auto" else "cuda")
 
@@ -798,8 +801,9 @@ class GPT_LAA(GPT, PyTorchModelHubMixin, PreTrainedModel):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer))
 
         if isinstance(device_map, OrderedDict) and '' in device_map:
+            print(f"Putting the model to device {device_map['']}")
             self.to(device_map[''])
-        else:
+        elif device_map is not None:
             print(f"Putting the model to {device_map}")
             self.to(device_map if device_map != "auto" else "cuda")
 
