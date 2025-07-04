@@ -704,9 +704,9 @@ class GPT_LAE(GPT, PyTorchModelHubMixin, PreTrainedModel):
             presents = presents + (present,)
         x = self.transformer.ln_f(x)
         individual_losses = []
+        logits = self.lm_head(x)
         if targets is not None:
             # if we are given some desired targets also calculate the loss
-            logits = self.lm_head(x)
             #loss = compute_loss(logits, targets)
             # Loss of tokens present in input prompt:
             input_loss = self.compute_loss(logits[:, :self.config.block_size-1].contiguous(),
@@ -721,8 +721,6 @@ class GPT_LAE(GPT, PyTorchModelHubMixin, PreTrainedModel):
                 )
             loss = sum(individual_losses) / len(individual_losses)
         else:
-            # inference-time mini-optimization: only forward the lm_head on the last position + look ahead positions:
-            logits = self.lm_head(x[:, -(1+self.config.look_ahead_size):, :])
             loss = None
 
         outcome = CausalLMOutputWithCrossAttentionsAndLookAhead(
@@ -839,9 +837,9 @@ class GPT_LAA(GPT, PyTorchModelHubMixin, PreTrainedModel):
             raise NotImplemented
         look_ahead_logits = self.lm_head_lookahead(x_for_lookahead)
         individual_losses = []
+        logits = self.lm_head(x)
         if targets is not None:
             # if we are given some desired targets also calculate the loss
-            logits = self.lm_head(x)
             #all_logits = torch.cat([logits, look_ahead_logits], dim=1)
             #loss = compute_loss(all_logits, targets)
 
@@ -856,8 +854,6 @@ class GPT_LAA(GPT, PyTorchModelHubMixin, PreTrainedModel):
                 )
             loss = sum(individual_losses) / len(individual_losses)
         else:
-            # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(x[:, [-1], :])  # note: using list [-1] to preserve the time dim
             loss = None
 
         outcome = CausalLMOutputWithCrossAttentionsAndLookAhead(
