@@ -226,7 +226,6 @@ if block_size < model.config.block_size:
     model.crop_block_size(block_size)
     model_args['block_size'] = block_size  # so that the checkpoint will have the right value
 model.to(device)
-model_params = model.get_num_params()
 
 # initialize a GradScaler. If enabled=False scaler is a no-op
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
@@ -289,10 +288,13 @@ def get_lr(it):
 if wandb_log and master_process:
     import wandb
     config_for_wandb = config.copy()
+    config_for_wandb["vocab_size"] = model_args["vocab_size"]
     config_for_wandb["Slurm_job_file_content"] = os.environ.get("SLRUM_JOB_FILE_CONTENT", "not set")
     config_for_wandb["Slurm_job_id"] = os.environ.get("SLURM_JOB_ID", "not set")
     config_for_wandb["Slurm_job_file_name"] = os.environ.get("SLURM_JOB_FILE_NAME", "not set")
-    config_for_wandb["model_params"] = model_params
+    config_for_wandb["model_params"] = model.get_num_params()
+    config_for_wandb["model_args"] = model_args
+
     if len(wandb_run_id) > 0:
         wandb_resume = "must"
     else:
