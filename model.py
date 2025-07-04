@@ -160,13 +160,10 @@ class GPTConfig(PretrainedConfig):
         super().__init__(**kwargs)
 
 
-class GPT(PyTorchModelHubMixin, PreTrainedModel,
-            repo_url="https://github.com/HRezaei/nanoGPT",
-            pipeline_tag="text-generation",
-            license="mit",):
+class GPT(PreTrainedModel):
     config_class = GPTConfig
 
-    def __init__(self, config, device_map=None, **kwargs):
+    def __init__(self, config):
         config.auto_map["AutoModel"] = f"model.{self.__class__.__name__}"
         config.auto_map["AutoModelForCausalLM"] = f"model.{self.__class__.__name__}"
         model_type = self.__class__.__name__.lower().replace("gpt", "").replace("_", "")
@@ -197,13 +194,6 @@ class GPT(PyTorchModelHubMixin, PreTrainedModel,
         for pn, p in self.named_parameters():
             if pn.endswith('c_proj.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
-
-        if isinstance(device_map, OrderedDict) and '' in device_map:
-            print(f"Putting the model to device {device_map['']}")
-            self.to(device_map[''])
-        elif device_map is not None:
-            print(f"Putting the model to {device_map}")
-            self.to(device_map if device_map != "auto" else "cuda")
 
     def get_num_params(self, exclude_embeddings=True):
         """
@@ -456,13 +446,10 @@ class CausalLMOutputWithCrossAttentionsAndLookAhead(CausalLMOutputWithCrossAtten
     look_ahead_logits: torch.FloatTensor = None
 
 
-class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
-            repo_url="https://github.com/HRezaei/nanoGPT",
-            pipeline_tag="text-generation",
-            license="mit",):
+class GPTLA(GPT, PreTrainedModel):
     config_class = GPTConfig
 
-    def __init__(self, config, device_map=None, **kwargs):
+    def __init__(self, config):
         config.auto_map["AutoModel"] = f"model.{self.__class__.__name__}"
         config.auto_map["AutoModelForCausalLM"] = f"model.{self.__class__.__name__}"
         super().__init__(config)
@@ -490,13 +477,6 @@ class GPTLA(GPT, PyTorchModelHubMixin, PreTrainedModel,
         for pn, p in self.named_parameters():
             if pn.endswith('c_proj.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
-
-        if isinstance(device_map, OrderedDict) and '' in device_map:
-            print(f"Putting the model to device {device_map['']}")
-            self.to(device_map[''])
-        elif device_map is not None:
-            print(f"Putting the model to {device_map}")
-            self.to(device_map if device_map != "auto" else "cuda")
 
     def forward(self, input_ids, targets=None, output_hidden_states=False, past_key_values=None, **kwargs):
         output = super().forward(
