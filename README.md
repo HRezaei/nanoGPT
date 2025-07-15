@@ -1,3 +1,9 @@
+# LookAhead Version of nanoGPT
+This is a fork of the nanoGPT used for the experiments of the paper 
+"[Interactive Text Games: Lookahead Is All You Need!](https://openreview.net/pdf?id=D38rTnrkal)". You can find the code 
+for this paper on the branch: [feature/lookahead](https://github.com/HRezaei/nanoGPT/tree/feature/lookahead). 
+The pre-trained models are also [available on HuggingFace 🤗](https://huggingface.co/hrezaei/nanoGPTLookAhead). Feel 
+free to create issue or discussions if there was any problem/question regarding the code in the above branch.
 
 # nanoGPT
 
